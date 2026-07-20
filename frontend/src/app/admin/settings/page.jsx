@@ -22,6 +22,7 @@ import {
   ShieldCheck,
   Store,
   Sun,
+  Truck,
   Type
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
@@ -35,6 +36,7 @@ export default function AdminSettingsPage() {
   const [storeAddress, setStoreAddress] = useState("");
   const [whatsappNumber, setWhatsappNumber] = useState("");
   const [headerPhoneNumber, setHeaderPhoneNumber] = useState("");
+  const [deliveryFee, setDeliveryFee] = useState("");
   const [themeMode, setThemeMode] = useState("light");
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
@@ -75,6 +77,7 @@ export default function AdminSettingsPage() {
         setStoreAddress(data.settings?.storeAddress || "");
         setWhatsappNumber(data.settings?.whatsappNumber || "");
         setHeaderPhoneNumber(data.settings?.headerPhoneNumber || "");
+        setDeliveryFee(String(data.settings?.deliveryFee ?? 0));
         setThemeMode(data.settings?.themeMode === "dark" ? "dark" : "light");
         setStatus((current) => ({ ...current, loading: false }));
       } catch (error) {
@@ -104,6 +107,7 @@ export default function AdminSettingsPage() {
           storeAddress,
           whatsappNumber,
           headerPhoneNumber,
+          deliveryFee: Number(deliveryFee || 0),
           themeMode
         })
       });
@@ -114,6 +118,7 @@ export default function AdminSettingsPage() {
       setStoreAddress(data.settings?.storeAddress || "");
       setWhatsappNumber(data.settings?.whatsappNumber || "");
       setHeaderPhoneNumber(data.settings?.headerPhoneNumber || "");
+      setDeliveryFee(String(data.settings?.deliveryFee ?? 0));
       setThemeMode(data.settings?.themeMode === "dark" ? "dark" : "light");
       setStatus({ loading: false, saving: false, error: "", success: "تم حفظ إعدادات المتجر وتطبيقها بنجاح." });
     } catch (error) {
@@ -310,6 +315,27 @@ export default function AdminSettingsPage() {
                   disabled={status.loading}
                 />
                 <p className="text-xs font-bold leading-6 text-slate-500">يظهر في الشريط العلوي على شاشات الديسكتوب.</p>
+              </label>
+
+              <label className="block space-y-2 rounded-2xl border border-amber-100 bg-amber-50/70 p-4 sm:col-span-2">
+                <span className="flex items-center gap-2 text-sm font-black text-slate-800">
+                  <Truck size={18} className="text-amber-600" /> سعر التوصيل الثابت
+                </span>
+                <input
+                  dir="ltr"
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.01"
+                  value={deliveryFee}
+                  onChange={(event) => setDeliveryFee(event.target.value)}
+                  className="input-field text-left"
+                  placeholder="0"
+                  disabled={status.loading}
+                />
+                <p className="text-xs font-bold leading-6 text-slate-500">
+                  يُضاف تلقائيًا إلى إجمالي الطلب ورسالة واتساب. اكتب 0 لإلغاء سعر التوصيل وإخفائه من الطلب.
+                </p>
               </label>
             </section>
 

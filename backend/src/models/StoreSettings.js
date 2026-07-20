@@ -42,6 +42,12 @@ const storeSettingsSchema = new mongoose.Schema(
       default: "",
       trim: true
     },
+    deliveryFee: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 1000000
+    },
     themeMode: {
       type: String,
       enum: ["light", "dark"],

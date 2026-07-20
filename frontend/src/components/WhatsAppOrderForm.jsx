@@ -35,6 +35,8 @@ export default function WhatsAppOrderForm({ product, desktop = false }) {
   const selectedOffer = offers[selectedOfferIndex] || null;
   const selectedQuantity = Math.max(1, Number(selectedOffer?.quantity || 1));
   const selectedPrice = Number(selectedOffer?.price ?? product.price ?? 0);
+  const deliveryFee = Math.max(0, Number(product.deliveryFee || 0));
+  const totalPrice = selectedPrice + deliveryFee;
 
   const whatsappNumber = String(
     product.whatsappNumber || process.env.NEXT_PUBLIC_DEFAULT_WHATSAPP_NUMBER || ""
@@ -59,7 +61,8 @@ export default function WhatsAppOrderForm({ product, desktop = false }) {
       selectedOffer ? `العرض: ${selectedOffer.label}` : null,
       `الكمية: ${selectedQuantity}`,
       `السعر: ${formatPrice(selectedPrice, product.currency)}`,
-      "التوصيل: يُحدد عند تأكيد الطلب",
+      deliveryFee > 0 ? `سعر التوصيل: ${formatPrice(deliveryFee, product.currency)}` : null,
+      `الإجمالي: ${formatPrice(totalPrice, product.currency)}`,
       `الاسم: ${form.fullName}`,
       `الهاتف: ${form.phone}`,
       `الولاية: ${form.wilaya}`,
@@ -138,6 +141,8 @@ export default function WhatsAppOrderForm({ product, desktop = false }) {
         <OrderSummary
           price={selectedPrice}
           quantity={selectedQuantity}
+          deliveryFee={deliveryFee}
+          total={totalPrice}
           currency={product.currency}
         />
 
@@ -157,7 +162,9 @@ export default function WhatsAppOrderForm({ product, desktop = false }) {
   );
 }
 
-function OrderSummary({ price, quantity, currency }) {
+function OrderSummary({ price, quantity, deliveryFee, total, currency }) {
+  const hasDeliveryFee = deliveryFee > 0;
+
   return (
     <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
       <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3 text-sm font-black text-slate-900">
@@ -166,9 +173,11 @@ function OrderSummary({ price, quantity, currency }) {
       <dl className="space-y-3 px-4 py-4 text-sm">
         <SummaryRow label="سعر المنتج" value={formatPrice(price, currency)} />
         <SummaryRow label="الكمية" value={String(quantity)} />
-        <SummaryRow icon={Truck} label="سعر التوصيل" value="يُحدد عند التأكيد" muted />
+        {hasDeliveryFee ? (
+          <SummaryRow icon={Truck} label="سعر التوصيل" value={formatPrice(deliveryFee, currency)} />
+        ) : null}
         <div className="border-t border-slate-200 pt-3">
-          <SummaryRow label="الإجمالي قبل التوصيل" value={formatPrice(price, currency)} strong />
+          <SummaryRow label="الإجمالي" value={formatPrice(total, currency)} strong />
         </div>
       </dl>
     </div>

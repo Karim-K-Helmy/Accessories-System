@@ -42,7 +42,6 @@ export default function ProductLanding({ product, relatedProducts = [] }) {
               <ProductGallery product={product} desktop />
               <ProductDescription product={product} desktop />
               <ProductVideo product={product} desktop />
-              <ProductBanners banners={product.banners} desktop />
             </div>
 
             <aside className="space-y-5 [direction:rtl]">
@@ -54,6 +53,12 @@ export default function ProductLanding({ product, relatedProducts = [] }) {
               {relatedProducts.length ? <RelatedProducts products={relatedProducts} desktop /> : null}
             </aside>
           </div>
+
+          {product.banners?.length ? (
+            <div className="mt-9">
+              <ProductBanners banners={product.banners} desktop />
+            </div>
+          ) : null}
         </section>
       </div>
 

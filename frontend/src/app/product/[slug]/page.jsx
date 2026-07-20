@@ -22,6 +22,7 @@ const getProductData = cache(async (slug) => {
       ...product,
       whatsappNumber: settingsData.settings?.whatsappNumber || product.whatsappNumber || "",
       headerPhoneNumber: settingsData.settings?.headerPhoneNumber || "",
+      deliveryFee: Number(settingsData.settings?.deliveryFee || 0),
       themeMode: settingsData.settings?.themeMode === "dark" ? "dark" : "light",
       storeName: settingsData.settings?.storeName || STORE_NAME,
       storeTagline: settingsData.settings?.storeTagline || ""

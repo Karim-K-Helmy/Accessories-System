@@ -11,24 +11,29 @@ export default function ProductBanners({ banners = [], desktop = false }) {
   if (!banners.length) return null;
 
   if (desktop) {
+    const layoutClass = banners.length === 1
+      ? "mx-auto grid max-w-[980px] grid-cols-1"
+      : "grid grid-cols-1 gap-7 xl:grid-cols-2";
+
     return (
-      <section className="rounded-[30px] border border-slate-200 bg-white p-5 shadow-[0_18px_55px_rgba(15,23,42,0.07)]">
-        <div className="grid items-start gap-5 md:grid-cols-2 xl:grid-cols-3">
+      <section className="rounded-[34px] border border-slate-200 bg-white p-5 shadow-[0_22px_70px_rgba(15,23,42,0.08)] sm:p-7">
+        <div className={layoutClass}>
           {banners.map((banner, index) => {
             const size = dimensions(banner);
             return (
               <article
                 key={banner.publicId || banner.url || index}
-                className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_12px_35px_rgba(15,23,42,0.08)]"
+                className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_16px_45px_rgba(15,23,42,0.09)]"
               >
                 <Image
                   src={banner.url}
                   alt={`صورة إضافية ${index + 1}`}
                   width={size.width}
                   height={size.height}
-                  sizes="(min-width: 1280px) 360px, (min-width: 768px) 46vw, 100vw"
+                  sizes={banners.length === 1 ? "980px" : "(min-width: 1280px) 620px, 100vw"}
                   className="h-auto w-full object-contain"
                   style={{ objectPosition: `${banner.focusX ?? 50}% ${banner.focusY ?? 50}%` }}
+                  priority={index === 0}
                 />
               </article>
             );

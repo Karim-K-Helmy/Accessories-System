@@ -20,6 +20,12 @@ function normalizeTheme(value) {
   return value === "dark" ? "dark" : "light";
 }
 
+function cleanDeliveryFee(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return 0;
+  return Math.min(Math.round(number * 100) / 100, 1000000);
+}
+
 async function getOrCreateSettings() {
   const fallbackNumber = cleanPhoneNumber(process.env.DEFAULT_WHATSAPP_NUMBER);
 
@@ -34,6 +40,7 @@ async function getOrCreateSettings() {
         storeAddress: "",
         whatsappNumber: fallbackNumber,
         headerPhoneNumber: fallbackNumber,
+        deliveryFee: 0,
         themeMode: "light"
       }
     },
@@ -53,6 +60,7 @@ function publicSettings(settings) {
     storeAddress: settings.storeAddress || "",
     whatsappNumber: settings.whatsappNumber || "",
     headerPhoneNumber: settings.headerPhoneNumber || settings.whatsappNumber || "",
+    deliveryFee: cleanDeliveryFee(settings.deliveryFee),
     themeMode: normalizeTheme(settings.themeMode)
   };
 }
@@ -79,6 +87,7 @@ export async function updateSettings(req, res) {
   const storeAddress = cleanText(req.body.storeAddress, 220);
   const whatsappNumber = cleanPhoneNumber(req.body.whatsappNumber);
   const headerPhoneNumber = cleanPhoneNumber(req.body.headerPhoneNumber);
+  const deliveryFee = cleanDeliveryFee(req.body.deliveryFee);
   const themeMode = normalizeTheme(req.body.themeMode);
 
   if (whatsappNumber && whatsappNumber.length < 8) {
@@ -103,6 +112,7 @@ export async function updateSettings(req, res) {
         storeAddress,
         whatsappNumber,
         headerPhoneNumber,
+        deliveryFee,
         themeMode
       },
       $setOnInsert: {
