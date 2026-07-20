@@ -8,7 +8,7 @@ const imageSchema = new mongoose.Schema(
     height: { type: Number, min: 1, default: null },
     focusX: { type: Number, min: 0, max: 100, default: 50 },
     focusY: { type: Number, min: 0, max: 100, default: 50 },
-    fit: { type: String, enum: ["cover", "contain"], default: "cover" }
+    fit: { type: String, enum: ["cover", "contain"], default: "contain" }
   },
   { _id: false }
 );
@@ -26,7 +26,15 @@ const offerSchema = new mongoose.Schema(
 const productSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, maxlength: 160 },
-    slug: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    slug: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+      maxlength: 120,
+      match: /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+    },
     shortDescription: { type: String, trim: true, maxlength: 240, default: "" },
     description: { type: String, trim: true, default: "" },
     price: { type: Number, required: true, min: 0 },

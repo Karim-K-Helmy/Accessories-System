@@ -32,7 +32,8 @@ function normalizeImageMeta(value = {}) {
   return {
     focusX: clamp(value.focusX, 0, 100, 50),
     focusY: clamp(value.focusY, 0, 100, 50),
-    fit: value.fit === "contain" ? "contain" : "cover"
+    // All storefront images are displayed in full without cropping or distortion.
+    fit: "contain"
   };
 }
 
@@ -115,19 +116,26 @@ function productDataFromBody(body) {
   };
 }
 
-function createReadableSlug(value) {
+function createEnglishSlug(value) {
   return String(value || "")
-    .normalize("NFKC")
+    .normalize("NFKD")
     .toLowerCase()
     .trim()
-    .replace(/[\u064B-\u065F\u0670]/g, "")
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 120);
 }
 
-async function uniqueSlug(name, requestedSlug, currentProductId = null) {
-  const base = createReadableSlug(requestedSlug || name) || `product-${Date.now()}`;
+async function uniqueSlug(requestedSlug, currentProductId = null) {
+  const rawSlug = String(requestedSlug || "").trim();
+  const base = createEnglishSlug(rawSlug);
+
+  if (!base) {
+    const error = new Error("اكتب اسم رابط المنتج بالإنجليزية، مثل: samsung-galaxy-s26-ultra.");
+    error.status = 400;
+    throw error;
+  }
+
   let candidate = base;
   let suffix = 2;
 
@@ -170,20 +178,50 @@ async function uploadImages(files, metaItems, slug, kind) {
   const uploadedImages = [];
   for (const [index, file] of files.entries()) {
     const uploaded = await uploadBuffer(file.buffer, {
-      public_id: `${slug}-${kind}-${index + 1}-${Date.now()}`,
-      ...(kind === "banner"
-        ? {
-            // نحافظ على جودة البانرات الطولية 9:16 بدون قص إجباري.
-            transformation: [
-              { quality: "auto", fetch_format: "auto" },
-              { width: 1440, height: 2560, crop: "limit" }
-            ]
-          }
-        : {})
+      public_id: `${slug}-${kind}-${index + 1}-${Date.now()}`
     });
     uploadedImages.push(mergeImageMeta(uploaded, metaItems[index] || {}));
   }
   return uploadedImages;
+}
+
+function orderMediaItems(retained, uploaded, rawOrder, fieldName) {
+  const requestedOrder = parseJsonArray(rawOrder, fieldName);
+  if (!requestedOrder.length) return [...retained, ...uploaded];
+
+  const existingMap = new Map(retained.map((image) => [image.publicId, image]));
+  const usedExisting = new Set();
+  const usedNew = new Set();
+  const ordered = [];
+
+  for (const item of requestedOrder) {
+    if (item?.type === "existing") {
+      const publicId = String(item.publicId || "").trim();
+      const image = existingMap.get(publicId);
+      if (image && !usedExisting.has(publicId)) {
+        usedExisting.add(publicId);
+        ordered.push(image);
+      }
+      continue;
+    }
+
+    if (item?.type === "new") {
+      const index = Number(item.index);
+      if (Number.isInteger(index) && index >= 0 && index < uploaded.length && !usedNew.has(index)) {
+        usedNew.add(index);
+        ordered.push(uploaded[index]);
+      }
+    }
+  }
+
+  retained.forEach((image) => {
+    if (!usedExisting.has(image.publicId)) ordered.push(image);
+  });
+  uploaded.forEach((image, index) => {
+    if (!usedNew.has(index)) ordered.push(image);
+  });
+
+  return ordered;
 }
 
 export async function listPublicProducts(req, res) {
@@ -215,7 +253,7 @@ export async function createProduct(req, res) {
 
   try {
     const data = productDataFromBody(req.body);
-    data.slug = await uniqueSlug(data.name, req.body.slug);
+    data.slug = await uniqueSlug(req.body.slug);
 
     const mainUploaded = await uploadBuffer(mainFile.buffer, {
       public_id: `${data.slug}-main-${Date.now()}`
@@ -225,13 +263,15 @@ export async function createProduct(req, res) {
 
     const galleryFiles = req.files?.gallery || [];
     const galleryMeta = parseImageMetaArray(req.body.galleryMeta, "galleryMeta");
-    const gallery = await uploadImages(galleryFiles, galleryMeta, data.slug, "gallery");
-    uploadedPublicIds.push(...gallery.map((image) => image.publicId));
+    const uploadedGallery = await uploadImages(galleryFiles, galleryMeta, data.slug, "gallery");
+    uploadedPublicIds.push(...uploadedGallery.map((image) => image.publicId));
+    const gallery = orderMediaItems([], uploadedGallery, req.body.galleryOrder, "galleryOrder");
 
     const bannerFiles = req.files?.banners || [];
     const bannerMeta = parseImageMetaArray(req.body.bannerMeta, "bannerMeta");
-    const banners = await uploadImages(bannerFiles, bannerMeta, data.slug, "banner");
-    uploadedPublicIds.push(...banners.map((image) => image.publicId));
+    const uploadedBanners = await uploadImages(bannerFiles, bannerMeta, data.slug, "banner");
+    uploadedPublicIds.push(...uploadedBanners.map((image) => image.publicId));
+    const banners = orderMediaItems([], uploadedBanners, req.body.bannerOrder, "bannerOrder");
 
     const product = await Product.create({ ...data, mainImage, gallery, banners });
     res.status(201).json({ product });
@@ -250,7 +290,7 @@ export async function updateProduct(req, res) {
 
   try {
     const data = productDataFromBody(req.body);
-    data.slug = await uniqueSlug(data.name, req.body.slug, product._id);
+    data.slug = await uniqueSlug(req.body.slug, product._id);
 
     let mainImage;
     const newMainFile = req.files?.mainImage?.[0];
@@ -283,7 +323,12 @@ export async function updateProduct(req, res) {
     }
     const uploadedGallery = await uploadImages(newGalleryFiles, newGalleryMeta, data.slug, "gallery");
     uploadedPublicIds.push(...uploadedGallery.map((image) => image.publicId));
-    const gallery = [...galleryResult.retained, ...uploadedGallery];
+    const gallery = orderMediaItems(
+      galleryResult.retained,
+      uploadedGallery,
+      req.body.galleryOrder,
+      "galleryOrder"
+    );
 
     const currentBanners = (product.banners || []).map(imageToPlain);
     const requestedBanners = req.body.existingBanners === undefined
@@ -301,7 +346,12 @@ export async function updateProduct(req, res) {
     }
     const uploadedBanners = await uploadImages(newBannerFiles, newBannerMeta, data.slug, "banner");
     uploadedPublicIds.push(...uploadedBanners.map((image) => image.publicId));
-    const banners = [...bannerResult.retained, ...uploadedBanners];
+    const banners = orderMediaItems(
+      bannerResult.retained,
+      uploadedBanners,
+      req.body.bannerOrder,
+      "bannerOrder"
+    );
 
     Object.assign(product, data, { mainImage, gallery, banners });
     await product.save();

@@ -13,8 +13,7 @@ export default function ProductCard({ product }) {
             alt={product.name}
             fill
             sizes="(max-width: 768px) 100vw, 33vw"
-            className={`${product.mainImage.fit === "contain" ? "object-contain" : "object-cover"} transition duration-500 hover:scale-105`}
-            style={{ objectPosition: `${product.mainImage.focusX ?? 50}% ${product.mainImage.focusY ?? 50}%` }}
+            className="object-contain p-2 transition duration-500 hover:scale-[1.02]"
           />
           {product.oldPrice && product.oldPrice > product.price ? (
             <span className="absolute right-4 top-4 rounded-full bg-red-600 px-3 py-1 text-xs font-black text-white">

@@ -5,12 +5,15 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 import {
+  ArrowDown,
+  ArrowUp,
   Box,
   CheckCircle2,
   Copy,
   Crop,
   ExternalLink,
   Eye,
+  GripVertical,
   EyeOff,
   ImageIcon,
   ImagePlus,
@@ -32,16 +35,15 @@ import {
 import { apiFetch, formatPrice } from "@/lib/api";
 
 const emptyOffer = () => ({ label: "", quantity: "", price: "", savingsText: "" });
-const defaultImageMeta = () => ({ focusX: 50, focusY: 50, fit: "cover" });
+const defaultImageMeta = () => ({ focusX: 50, focusY: 50, fit: "contain" });
 const MAX_IMAGE_SIZE_BYTES = 20 * 1024 * 1024;
 
 function makeSlugPreview(value) {
   return String(value || "")
-    .normalize("NFKC")
+    .normalize("NFKD")
     .toLowerCase()
     .trim()
-    .replace(/[\u064B-\u065F\u0670]/g, "")
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 120);
 }
@@ -52,7 +54,7 @@ function normalizeStoredImage(image) {
     ...image,
     focusX: Number.isFinite(Number(image.focusX)) ? Number(image.focusX) : 50,
     focusY: Number.isFinite(Number(image.focusY)) ? Number(image.focusY) : 50,
-    fit: image.fit === "contain" ? "contain" : "cover",
+    fit: "contain",
     localId: image.publicId
   };
 }
@@ -72,8 +74,35 @@ function imageMetaPayload(image, includePublicId = false) {
     ...(includePublicId ? { publicId: image.publicId } : {}),
     focusX: Math.round(Number(image.focusX ?? 50)),
     focusY: Math.round(Number(image.focusY ?? 50)),
-    fit: image.fit === "contain" ? "contain" : "cover"
+    fit: "contain"
   };
+}
+
+function mediaKeys(kind) {
+  return kind === "gallery"
+    ? { existingKey: "existingGallery", newKey: "gallery", orderKey: "galleryOrder" }
+    : { existingKey: "existingBanners", newKey: "banners", orderKey: "bannerOrder" };
+}
+
+function orderedMedia(form, kind) {
+  const { existingKey, newKey, orderKey } = mediaKeys(kind);
+  const all = [...form[existingKey], ...form[newKey]];
+  const byId = new Map(all.map((image) => [image.localId, image]));
+  const ordered = (form[orderKey] || []).map((id) => byId.get(id)).filter(Boolean);
+  const included = new Set(ordered.map((image) => image.localId));
+  return [...ordered, ...all.filter((image) => !included.has(image.localId))];
+}
+
+function buildMediaOrderPayload(form, kind) {
+  const { existingKey, newKey } = mediaKeys(kind);
+  const existingMap = new Map(form[existingKey].map((image) => [image.localId, image]));
+  const newIndexMap = new Map(form[newKey].map((image, index) => [image.localId, index]));
+
+  return orderedMedia(form, kind).map((image) => {
+    const existing = existingMap.get(image.localId);
+    if (existing) return { type: "existing", publicId: existing.publicId };
+    return { type: "new", index: newIndexMap.get(image.localId) };
+  });
 }
 
 const initialForm = () => ({
@@ -92,8 +121,10 @@ const initialForm = () => ({
   mainImage: null,
   existingGallery: [],
   gallery: [],
+  galleryOrder: [],
   existingBanners: [],
   banners: [],
+  bannerOrder: [],
   offers: [emptyOffer()]
 });
 
@@ -171,6 +202,9 @@ export default function AdminDashboardPage() {
   }
 
   function startEdit(product) {
+    const existingGallery = (product.gallery || []).map(normalizeStoredImage);
+    const existingBanners = (product.banners || []).map(normalizeStoredImage);
+
     setForm({
       id: product._id,
       name: product.name || "",
@@ -185,10 +219,12 @@ export default function AdminDashboardPage() {
       active: Boolean(product.active),
       existingMainImage: normalizeStoredImage(product.mainImage),
       mainImage: null,
-      existingGallery: (product.gallery || []).map(normalizeStoredImage),
+      existingGallery,
       gallery: [],
-      existingBanners: (product.banners || []).map(normalizeStoredImage),
+      galleryOrder: existingGallery.map((image) => image.localId),
+      existingBanners,
       banners: [],
+      bannerOrder: existingBanners.map((image) => image.localId),
       offers: product.offers?.length
         ? product.offers.map((offer) => ({
             label: offer.label,
@@ -218,13 +254,17 @@ export default function AdminDashboardPage() {
 
     const oversized = selected.filter((file) => file.size > MAX_IMAGE_SIZE_BYTES);
     const validFiles = selected.filter((file) => file.size <= MAX_IMAGE_SIZE_BYTES);
-
-    const existingKey = target === "gallery" ? "existingGallery" : "existingBanners";
+    const kind = target === "gallery" ? "gallery" : "banners";
+    const { existingKey, orderKey } = mediaKeys(kind === "gallery" ? "gallery" : "banners");
     const currentTotal = form[existingKey].length + form[target].length;
     const available = Math.max(0, max - currentTotal);
     const accepted = validFiles.slice(0, available).map(createLocalImage);
 
-    setForm((current) => ({ ...current, [target]: [...current[target], ...accepted] }));
+    setForm((current) => ({
+      ...current,
+      [target]: [...current[target], ...accepted],
+      [orderKey]: [...current[orderKey], ...accepted.map((image) => image.localId)]
+    }));
 
     if (oversized.length || validFiles.length > available) {
       const messages = [];
@@ -255,10 +295,52 @@ export default function AdminDashboardPage() {
   function removeManagedImage(target, localId) {
     setForm((current) => {
       if (target === "mainImage") return { ...current, mainImage: null };
+
+      const orderKey =
+        target === "existingGallery" || target === "gallery"
+          ? "galleryOrder"
+          : target === "existingBanners" || target === "banners"
+            ? "bannerOrder"
+            : null;
+
       return {
         ...current,
-        [target]: current[target].filter((image) => image.localId !== localId)
+        [target]: current[target].filter((image) => image.localId !== localId),
+        ...(orderKey
+          ? { [orderKey]: current[orderKey].filter((id) => id !== localId) }
+          : {})
       };
+    });
+  }
+
+  function moveMedia(kind, localId, direction) {
+    const { orderKey } = mediaKeys(kind);
+    setForm((current) => {
+      const normalizedOrder = orderedMedia(current, kind).map((image) => image.localId);
+      const currentIndex = normalizedOrder.indexOf(localId);
+      const nextIndex = currentIndex + direction;
+      if (currentIndex < 0 || nextIndex < 0 || nextIndex >= normalizedOrder.length) return current;
+
+      const nextOrder = [...normalizedOrder];
+      const [item] = nextOrder.splice(currentIndex, 1);
+      nextOrder.splice(nextIndex, 0, item);
+      return { ...current, [orderKey]: nextOrder };
+    });
+  }
+
+  function dropMedia(kind, draggedId, targetId) {
+    if (!draggedId || !targetId || draggedId === targetId) return;
+    const { orderKey } = mediaKeys(kind);
+
+    setForm((current) => {
+      const nextOrder = orderedMedia(current, kind).map((image) => image.localId);
+      const fromIndex = nextOrder.indexOf(draggedId);
+      const toIndex = nextOrder.indexOf(targetId);
+      if (fromIndex < 0 || toIndex < 0) return current;
+
+      const [item] = nextOrder.splice(fromIndex, 1);
+      nextOrder.splice(toIndex, 0, item);
+      return { ...current, [orderKey]: nextOrder };
     });
   }
 
@@ -277,6 +359,16 @@ export default function AdminDashboardPage() {
       return;
     }
 
+    const cleanSlug = makeSlugPreview(form.slug);
+    if (!cleanSlug) {
+      setStatus((current) => ({
+        ...current,
+        saving: false,
+        error: "اكتب اسم رابط المنتج بالإنجليزية، مثل: samsung-galaxy-s26-ultra."
+      }));
+      return;
+    }
+
     const isEditing = Boolean(form.id);
 
     try {
@@ -290,7 +382,9 @@ export default function AdminDashboardPage() {
         "oldPrice",
         "currency",
         "videoUrl"
-      ].forEach((field) => payload.append(field, form[field] ?? ""));
+      ].forEach((field) =>
+        payload.append(field, field === "slug" ? cleanSlug : form[field] ?? "")
+      );
 
       payload.append("active", String(form.active));
       payload.append("mainImageMeta", JSON.stringify(imageMetaPayload(effectiveMainImage)));
@@ -299,11 +393,13 @@ export default function AdminDashboardPage() {
         JSON.stringify(form.existingGallery.map((image) => imageMetaPayload(image, true)))
       );
       payload.append("galleryMeta", JSON.stringify(form.gallery.map((image) => imageMetaPayload(image))));
+      payload.append("galleryOrder", JSON.stringify(buildMediaOrderPayload(form, "gallery")));
       payload.append(
         "existingBanners",
         JSON.stringify(form.existingBanners.map((image) => imageMetaPayload(image, true)))
       );
       payload.append("bannerMeta", JSON.stringify(form.banners.map((image) => imageMetaPayload(image))));
+      payload.append("bannerOrder", JSON.stringify(buildMediaOrderPayload(form, "banners")));
       payload.append(
         "features",
         JSON.stringify(form.featuresText.split("\n").map((item) => item.trim()).filter(Boolean))
@@ -345,12 +441,12 @@ export default function AdminDashboardPage() {
   }
 
   function productUrl(slug) {
-    const path = `/product/${encodeURIComponent(slug || "")}`;
+    const path = `/product/${slug || ""}`;
     return siteOrigin ? `${siteOrigin}${path}` : path;
   }
 
   async function copyProductLink(product) {
-    const url = `${window.location.origin}/product/${encodeURIComponent(product.slug)}`;
+    const url = `${window.location.origin}/product/${product.slug}`;
     try {
       await navigator.clipboard.writeText(url);
       setStatus((current) => ({ ...current, success: "تم نسخ رابط المنتج.", error: "" }));
@@ -412,8 +508,10 @@ export default function AdminDashboardPage() {
   }
 
   const mainPreview = form.mainImage || form.existingMainImage;
-  const galleryCount = form.existingGallery.length + form.gallery.length;
-  const bannersCount = form.existingBanners.length + form.banners.length;
+  const galleryImages = orderedMedia(form, "gallery");
+  const bannerImages = orderedMedia(form, "banners");
+  const galleryCount = galleryImages.length;
+  const bannersCount = bannerImages.length;
 
   return (
     <main className="min-h-screen bg-slate-100">
@@ -470,18 +568,29 @@ export default function AdminDashboardPage() {
 
               <div className="space-y-6 p-5 sm:p-6">
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <Input label="اسم المنتج" name="name" value={form.name} onChange={updateField} required placeholder="مثال: جراب حماية مع حامل" />
-                  <Input label="اسم الرابط — اختياري" name="slug" value={form.slug} onChange={updateField} placeholder="يُنشأ تلقائيًا من اسم المنتج" />
+                  <Input label="اسم المنتج" name="name" value={form.name} onChange={updateField} required placeholder="مثال: سامسونج جالاكسي S26 ألترا" />
+                  <Input
+                    label="اسم رابط المنتج بالإنجليزية"
+                    name="slug"
+                    value={form.slug}
+                    onChange={updateField}
+                    required
+                    dir="ltr"
+                    inputMode="url"
+                    placeholder="samsung-galaxy-s26-ultra"
+                  />
                   <div className="sm:col-span-2 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-3">
                     <div className="flex items-center gap-2 text-xs font-black text-emerald-800">
                       <Link2 size={15} /> رابط صفحة المنتج
                     </div>
                     <code dir="ltr" className="mt-2 block min-h-[40px] break-all rounded-xl bg-white px-3 py-2 text-left text-xs font-bold leading-6 text-slate-600">
-                      {makeSlugPreview(form.slug || form.name)
-                        ? productUrl(makeSlugPreview(form.slug || form.name))
+                      {makeSlugPreview(form.slug)
+                        ? productUrl(makeSlugPreview(form.slug))
                         : ""}
                     </code>
-                    <p className="mt-2 text-[11px] font-bold leading-5 text-emerald-700">اكتب اسم المنتج أولًا ليظهر الرابط تلقائيًا، ويمكنك بعد ذلك كتابة اسم مخصص للرابط.</p>
+                    <p className="mt-2 text-[11px] font-bold leading-5 text-emerald-700">
+                      اكتب اسمًا إنجليزيًا قصيرًا للرابط. المسافات تتحول تلقائيًا إلى شرطات.
+                    </p>
                   </div>
                   <Input label="السعر الحالي" name="price" type="number" min="0" step="0.01" value={form.price} onChange={updateField} required />
                   <Input label="السعر قبل الخصم" name="oldPrice" type="number" min="0" step="0.01" value={form.oldPrice} onChange={updateField} />
@@ -529,7 +638,7 @@ export default function AdminDashboardPage() {
                     <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-slate-950 text-white"><Crop size={20} /></span>
                     <div>
                       <h3 className="font-black text-slate-950">إدارة الصور والتحكم في الجزء الظاهر</h3>
-                      <p className="mt-1 text-xs font-bold leading-6 text-slate-500">عند التعديل ستظهر الصور الحالية هنا. اضغط داخل الصورة لتحديد نقطة التركيز، أو استخدم الشرائط، ويمكنك حذف صورة محددة دون استبدال المعرض كله.</p>
+                      <p className="mt-1 text-xs font-bold leading-6 text-slate-500">تظهر الصور كاملة بدون قص أو تشويه. اسحب الصورة وأفلتها لتغيير ترتيبها، ويمكنك حذف أي صورة منفردة.</p>
                     </div>
                   </div>
 
@@ -567,28 +676,30 @@ export default function AdminDashboardPage() {
                         }}
                       />
                       {galleryCount ? (
-                        <div className="mt-4 grid gap-4 md:grid-cols-2">
-                          {form.existingGallery.map((image) => (
-                            <ImageEditorCard
-                              key={image.localId}
-                              image={image}
-                              kind="gallery"
-                              badge="صورة حالية"
-                              onChange={(patch) => updateManagedImage("existingGallery", image.localId, patch)}
-                              onRemove={() => removeManagedImage("existingGallery", image.localId)}
-                            />
-                          ))}
-                          {form.gallery.map((image) => (
-                            <ImageEditorCard
-                              key={image.localId}
-                              image={image}
-                              kind="gallery"
-                              badge="صورة جديدة"
-                              onChange={(patch) => updateManagedImage("gallery", image.localId, patch)}
-                              onRemove={() => removeManagedImage("gallery", image.localId)}
-                            />
-                          ))}
-                        </div>
+                        <SortableMediaList
+                          kind="gallery"
+                          images={galleryImages}
+                          existingIds={new Set(form.existingGallery.map((image) => image.localId))}
+                          onChange={(image, patch) =>
+                            updateManagedImage(
+                              form.existingGallery.some((item) => item.localId === image.localId)
+                                ? "existingGallery"
+                                : "gallery",
+                              image.localId,
+                              patch
+                            )
+                          }
+                          onRemove={(image) =>
+                            removeManagedImage(
+                              form.existingGallery.some((item) => item.localId === image.localId)
+                                ? "existingGallery"
+                                : "gallery",
+                              image.localId
+                            )
+                          }
+                          onMove={(id, direction) => moveMedia("gallery", id, direction)}
+                          onDrop={(draggedId, targetId) => dropMedia("gallery", draggedId, targetId)}
+                        />
                       ) : <EmptyImages text="لا توجد صور إضافية حتى الآن." />}
                     </div>
 
@@ -603,28 +714,30 @@ export default function AdminDashboardPage() {
                         }}
                       />
                       {bannersCount ? (
-                        <div className="mt-4 space-y-4">
-                          {form.existingBanners.map((image) => (
-                            <ImageEditorCard
-                              key={image.localId}
-                              image={image}
-                              kind="banner"
-                              badge="صورة حالية"
-                              onChange={(patch) => updateManagedImage("existingBanners", image.localId, patch)}
-                              onRemove={() => removeManagedImage("existingBanners", image.localId)}
-                            />
-                          ))}
-                          {form.banners.map((image) => (
-                            <ImageEditorCard
-                              key={image.localId}
-                              image={image}
-                              kind="banner"
-                              badge="صورة جديدة"
-                              onChange={(patch) => updateManagedImage("banners", image.localId, patch)}
-                              onRemove={() => removeManagedImage("banners", image.localId)}
-                            />
-                          ))}
-                        </div>
+                        <SortableMediaList
+                          kind="banners"
+                          images={bannerImages}
+                          existingIds={new Set(form.existingBanners.map((image) => image.localId))}
+                          onChange={(image, patch) =>
+                            updateManagedImage(
+                              form.existingBanners.some((item) => item.localId === image.localId)
+                                ? "existingBanners"
+                                : "banners",
+                              image.localId,
+                              patch
+                            )
+                          }
+                          onRemove={(image) =>
+                            removeManagedImage(
+                              form.existingBanners.some((item) => item.localId === image.localId)
+                                ? "existingBanners"
+                                : "banners",
+                              image.localId
+                            )
+                          }
+                          onMove={(id, direction) => moveMedia("banners", id, direction)}
+                          onDrop={(draggedId, targetId) => dropMedia("banners", draggedId, targetId)}
+                        />
                       ) : <EmptyImages text="لا توجد صور إضافية حتى الآن." />}
                     </div>
                   </div>
@@ -676,7 +789,7 @@ export default function AdminDashboardPage() {
                           alt={product.name}
                           fill
                           sizes="96px"
-                          className={product.mainImage.fit === "contain" ? "object-contain" : "object-cover"}
+                          className="object-contain p-1"
                           style={{ objectPosition: `${product.mainImage.focusX ?? 50}% ${product.mainImage.focusY ?? 50}%` }}
                         />
                       </div>
@@ -726,88 +839,152 @@ export default function AdminDashboardPage() {
   );
 }
 
-function ImageEditorCard({ image, kind, badge, onChange, onRemove }) {
-  const aspectClass = kind === "banner" ? "mx-auto aspect-[9/16] max-w-[360px]" : kind === "main" ? "aspect-[4/4.35]" : "aspect-square";
-
-  function setFocusFromClick(event) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const focusX = Math.round(((event.clientX - rect.left) / rect.width) * 100);
-    const focusY = Math.round(((event.clientY - rect.top) / rect.height) * 100);
-    onChange({ focusX: Math.min(100, Math.max(0, focusX)), focusY: Math.min(100, Math.max(0, focusY)) });
-  }
+function SortableMediaList({
+  kind,
+  images,
+  existingIds,
+  onChange,
+  onRemove,
+  onMove,
+  onDrop
+}) {
+  const [draggedId, setDraggedId] = useState("");
+  const isGallery = kind === "gallery";
 
   return (
-    <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <button
-        type="button"
-        onClick={setFocusFromClick}
-        className={`relative block w-full overflow-hidden bg-slate-100 ${aspectClass}`}
-        title="اضغط لتحديد الجزء المهم من الصورة"
+    <div className={`mt-4 grid gap-4 ${isGallery ? "md:grid-cols-2" : "md:grid-cols-2 xl:grid-cols-3"}`}>
+      {images.map((image, index) => (
+        <ImageEditorCard
+          key={image.localId}
+          image={image}
+          kind={isGallery ? "gallery" : "banner"}
+          badge={existingIds.has(image.localId) ? "صورة حالية" : "صورة جديدة"}
+          onChange={(patch) => onChange(image, patch)}
+          onRemove={() => onRemove(image)}
+          canMoveUp={index > 0}
+          canMoveDown={index < images.length - 1}
+          onMoveUp={() => onMove(image.localId, -1)}
+          onMoveDown={() => onMove(image.localId, 1)}
+          draggable
+          dragging={draggedId === image.localId}
+          onDragStart={(event) => {
+            setDraggedId(image.localId);
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", image.localId);
+          }}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            const sourceId = event.dataTransfer.getData("text/plain") || draggedId;
+            onDrop(sourceId, image.localId);
+            setDraggedId("");
+          }}
+          onDragEnd={() => setDraggedId("")}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ImageEditorCard({
+  image,
+  kind,
+  badge,
+  onChange,
+  onRemove,
+  canMoveUp = false,
+  canMoveDown = false,
+  onMoveUp,
+  onMoveDown,
+  draggable = false,
+  dragging = false,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd
+}) {
+  const naturalRatio =
+    Number(image.width) > 0 && Number(image.height) > 0
+      ? `${image.width} / ${image.height}`
+      : kind === "banner"
+        ? "9 / 16"
+        : "1 / 1";
+
+  return (
+    <article
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
+      className={`overflow-hidden rounded-2xl border bg-white shadow-sm transition ${
+        dragging ? "scale-[.98] border-emerald-500 opacity-55" : "border-slate-200"
+      } ${draggable ? "cursor-grab active:cursor-grabbing" : ""}`}
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-3 py-2.5">
+        <span className="inline-flex items-center gap-2 text-[11px] font-black text-slate-600">
+          {draggable ? <GripVertical size={16} className="text-emerald-600" /> : <ImageIcon size={15} />}
+          {draggable ? "اسحب لتغيير الترتيب" : badge}
+        </span>
+        <span className="rounded-full bg-slate-950 px-2.5 py-1 text-[10px] font-black text-white">
+          {badge}
+        </span>
+      </div>
+
+      <div
+        className={`relative mx-auto flex w-full items-center justify-center overflow-hidden bg-white ${
+          kind === "main" ? "max-w-[520px]" : kind === "banner" ? "max-w-[430px]" : ""
+        }`}
+        style={{ aspectRatio: naturalRatio }}
       >
         <img
           src={image.url}
           alt="معاينة الصورة"
-          className="h-full w-full"
-          style={{
-            objectFit: image.fit === "contain" ? "contain" : "cover",
-            objectPosition: `${image.focusX ?? 50}% ${image.focusY ?? 50}%`
-          }}
+          className="h-full w-full object-contain"
+          draggable={false}
         />
-        <span className="absolute right-3 top-3 rounded-full bg-slate-950/85 px-2.5 py-1 text-[10px] font-black text-white backdrop-blur">{badge}</span>
-        <span
-          className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-emerald-500 shadow-[0_0_0_3px_rgba(15,23,42,.5)]"
-          style={{ left: `${image.focusX ?? 50}%`, top: `${image.focusY ?? 50}%` }}
-        />
-        <span className="pointer-events-none absolute bottom-3 left-3 inline-flex items-center gap-1 rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-black text-slate-700 shadow backdrop-blur"><Move size={12} /> اضغط لتحريك التركيز</span>
-      </button>
+      </div>
 
       <div className="space-y-3 p-3">
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={() => onChange({ fit: "cover" })}
-            className={`rounded-xl px-3 py-2 text-xs font-black ${image.fit !== "contain" ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600"}`}
-          >
-            ملء الإطار
-          </button>
-          <button
-            type="button"
-            onClick={() => onChange({ fit: "contain" })}
-            className={`rounded-xl px-3 py-2 text-xs font-black ${image.fit === "contain" ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600"}`}
-          >
-            الصورة كاملة
-          </button>
-        </div>
+        <p className="rounded-xl bg-emerald-50 px-3 py-2 text-center text-[11px] font-black leading-5 text-emerald-700">
+          تظهر الصورة كاملة بأبعادها الأصلية بدون قص أو تشويه.
+        </p>
 
-        <FocusSlider label="التركيز أفقيًا" value={image.focusX ?? 50} onChange={(value) => onChange({ focusX: value })} />
-        <FocusSlider label="التركيز رأسيًا" value={image.focusY ?? 50} onChange={(value) => onChange({ focusY: value })} />
+        {draggable ? (
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={onMoveUp}
+              disabled={!canMoveUp}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              <ArrowUp size={15} /> للأعلى
+            </button>
+            <button
+              type="button"
+              onClick={onMoveDown}
+              disabled={!canMoveDown}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              <ArrowDown size={15} /> للأسفل
+            </button>
+          </div>
+        ) : null}
 
         {onRemove ? (
-          <button type="button" onClick={onRemove} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-red-50 px-3 py-2.5 text-xs font-black text-red-700">
+          <button
+            type="button"
+            onClick={onRemove}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-red-50 px-3 py-2.5 text-xs font-black text-red-700"
+          >
             <Trash2 size={15} /> حذف هذه الصورة فقط
           </button>
         ) : null}
       </div>
     </article>
-  );
-}
-
-function FocusSlider({ label, value, onChange }) {
-  return (
-    <label className="block rounded-xl bg-slate-50 p-2.5">
-      <span className="mb-2 flex items-center justify-between gap-3 text-[11px] font-black text-slate-600">
-        <span>{label}</span><span dir="ltr">{Math.round(value)}%</span>
-      </span>
-      <input
-        dir="ltr"
-        type="range"
-        min="0"
-        max="100"
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-        className="h-2 w-full cursor-pointer accent-emerald-600"
-      />
-    </label>
   );
 }
 
