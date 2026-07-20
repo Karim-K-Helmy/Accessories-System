@@ -15,14 +15,13 @@ export const productImageUpload = multer({
   storage,
   fileFilter,
   limits: {
-    // الحد لكل صورة منفردة. البانرات الطولية قد تكون عالية الدقة.
     fileSize: 20 * 1024 * 1024,
-    files: 15,
-    fields: 40,
-    parts: 60
+    files: 110,
+    fields: 90,
+    parts: 220
   }
 }).fields([
-  { name: "mainImage", maxCount: 1 },
-  { name: "gallery", maxCount: 8 },
-  { name: "banners", maxCount: 6 }
+  { name: "banners", maxCount: 6 },
+  { name: "variantMainImages", maxCount: 16 },
+  { name: "variantGalleryImages", maxCount: 80 }
 ]);

@@ -1,5 +1,6 @@
 import Product from "../models/Product.js";
-import { deleteCloudinaryImage, uploadBuffer } from "../utils/cloudinaryUpload.js";
+import { uploadBuffer } from "../utils/cloudinaryUpload.js";
+import { deleteCloudinaryImagesSafely } from "../services/cloudinaryCleanupService.js";
 
 function parseJson(value, fieldName, fallback) {
   if (value === undefined || value === null || value === "") return fallback;
@@ -32,26 +33,8 @@ function normalizeImageMeta(value = {}) {
   return {
     focusX: clamp(value.focusX, 0, 100, 50),
     focusY: clamp(value.focusY, 0, 100, 50),
-    // All storefront images are displayed in full without cropping or distortion.
-    fit: "contain"
+    fit: value.fit === "contain" ? "contain" : "cover"
   };
-}
-
-function parseImageMeta(value, fieldName) {
-  const parsed = parseJson(value, fieldName, {});
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
-    const error = new Error(`${fieldName} must be a valid JSON object.`);
-    error.status = 400;
-    throw error;
-  }
-  return normalizeImageMeta(parsed);
-}
-
-function parseImageMetaArray(value, fieldName) {
-  return parseJsonArray(value, fieldName).map((item) => ({
-    publicId: String(item?.publicId || "").trim(),
-    ...normalizeImageMeta(item)
-  }));
 }
 
 function imageToPlain(image) {
@@ -84,16 +67,9 @@ function normalizeOffers(value) {
 
 function productDataFromBody(body) {
   const name = String(body.name || "").trim();
-  const price = Number(body.price);
 
   if (!name) {
     const error = new Error("Product name is required.");
-    error.status = 400;
-    throw error;
-  }
-
-  if (!Number.isFinite(price) || price < 0) {
-    const error = new Error("Product price must be a valid non-negative number.");
     error.status = 400;
     throw error;
   }
@@ -102,11 +78,6 @@ function productDataFromBody(body) {
     name,
     shortDescription: String(body.shortDescription || "").trim(),
     description: String(body.description || "").trim(),
-    price,
-    oldPrice:
-      body.oldPrice === "" || body.oldPrice === undefined || body.oldPrice === null
-        ? null
-        : Number(body.oldPrice),
     currency: String(body.currency || "دج").trim() || "دج",
     videoUrl: String(body.videoUrl || "").trim(),
     whatsappNumber: String(body.whatsappNumber || process.env.DEFAULT_WHATSAPP_NUMBER || "").replace(/\D/g, ""),
@@ -116,26 +87,19 @@ function productDataFromBody(body) {
   };
 }
 
-function createEnglishSlug(value) {
+function createReadableSlug(value) {
   return String(value || "")
-    .normalize("NFKD")
+    .normalize("NFKC")
     .toLowerCase()
     .trim()
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[\u064B-\u065F\u0670]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 120);
 }
 
-async function uniqueSlug(requestedSlug, currentProductId = null) {
-  const rawSlug = String(requestedSlug || "").trim();
-  const base = createEnglishSlug(rawSlug);
-
-  if (!base) {
-    const error = new Error("اكتب اسم رابط المنتج بالإنجليزية، مثل: samsung-galaxy-s26-ultra.");
-    error.status = 400;
-    throw error;
-  }
-
+async function uniqueSlug(name, requestedSlug, currentProductId = null) {
+  const base = createReadableSlug(requestedSlug || name) || `product-${Date.now()}`;
   let candidate = base;
   let suffix = 2;
 
@@ -150,6 +114,67 @@ async function uniqueSlug(requestedSlug, currentProductId = null) {
   }
 
   return candidate;
+}
+
+function normalizeColorHex(value) {
+  const raw = String(value || "").trim();
+  if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(raw)) return raw;
+  return "#111827";
+}
+
+function parseColorVariants(value) {
+  const variants = parseJsonArray(value, "colorVariants")
+    .map((variant, index) => ({
+      clientId: String(variant.clientId || `variant-${index + 1}`),
+      name: String(variant.name || "").trim(),
+      colorHex: normalizeColorHex(variant.colorHex),
+      price: Number(variant.price),
+      oldPrice:
+        variant.oldPrice === "" || variant.oldPrice === undefined || variant.oldPrice === null
+          ? null
+          : Number(variant.oldPrice),
+      stock: Math.max(0, Math.round(Number(variant.stock ?? 0) || 0)),
+      existingMainImage:
+        variant.existingMainImage && typeof variant.existingMainImage === "object"
+          ? {
+              publicId: String(variant.existingMainImage.publicId || "").trim(),
+              ...normalizeImageMeta(variant.existingMainImage)
+            }
+          : null,
+      existingGallery: Array.isArray(variant.existingGallery)
+        ? variant.existingGallery.map((item) => ({
+            publicId: String(item?.publicId || "").trim(),
+            ...normalizeImageMeta(item)
+          }))
+        : [],
+      mainImageSlot: Number.isInteger(Number(variant.mainImageSlot)) ? Number(variant.mainImageSlot) : -1,
+      mainImageMeta: normalizeImageMeta(variant.mainImageMeta || {}),
+      newGallerySlots: Array.isArray(variant.newGallerySlots)
+        ? variant.newGallerySlots
+            .map((slot) => Number(slot))
+            .filter((slot) => Number.isInteger(slot) && slot >= 0)
+        : [],
+      newGalleryMeta: Array.isArray(variant.newGalleryMeta)
+        ? variant.newGalleryMeta.map((item) => normalizeImageMeta(item))
+        : []
+    }))
+    .filter((variant) => variant.name)
+    .slice(0, 16);
+
+  if (!variants.length) {
+    const error = new Error("Add at least one product color.");
+    error.status = 400;
+    throw error;
+  }
+
+  return variants;
+}
+
+function normalizeBannerMeta(value) {
+  return parseJsonArray(value, "existingBanners").map((item) => ({
+    publicId: String(item?.publicId || "").trim(),
+    ...normalizeImageMeta(item)
+  }));
 }
 
 function retainExistingImages(currentImages, requestedImages, fieldName) {
@@ -170,64 +195,149 @@ function retainExistingImages(currentImages, requestedImages, fieldName) {
     retained.push(mergeImageMeta(existing, requested));
   }
 
-  const removed = current.filter((image) => !seen.has(image.publicId));
-  return { retained, removed };
+  return retained;
 }
 
 async function uploadImages(files, metaItems, slug, kind) {
   const uploadedImages = [];
   for (const [index, file] of files.entries()) {
     const uploaded = await uploadBuffer(file.buffer, {
-      public_id: `${slug}-${kind}-${index + 1}-${Date.now()}`
+      public_id: `${slug}-${kind}-${index + 1}-${Date.now()}`,
+      ...(kind === "banner"
+        ? {
+            transformation: [
+              { quality: "auto", fetch_format: "auto" },
+              { width: 1440, height: 2560, crop: "limit" }
+            ]
+          }
+        : {})
     });
     uploadedImages.push(mergeImageMeta(uploaded, metaItems[index] || {}));
   }
   return uploadedImages;
 }
 
-function orderMediaItems(retained, uploaded, rawOrder, fieldName) {
-  const requestedOrder = parseJsonArray(rawOrder, fieldName);
-  if (!requestedOrder.length) return [...retained, ...uploaded];
+function collectCurrentImageCandidates(product) {
+  const images = [
+    product?.mainImage,
+    ...(product?.gallery || []),
+    ...(product?.colorVariants || []).map((variant) => variant.mainImage),
+    ...(product?.colorVariants || []).flatMap((variant) => variant.gallery || [])
+  ]
+    .map(imageToPlain)
+    .filter(Boolean);
 
-  const existingMap = new Map(retained.map((image) => [image.publicId, image]));
-  const usedExisting = new Set();
-  const usedNew = new Set();
-  const ordered = [];
+  return new Map(images.map((image) => [image.publicId, image]));
+}
 
-  for (const item of requestedOrder) {
-    if (item?.type === "existing") {
-      const publicId = String(item.publicId || "").trim();
-      const image = existingMap.get(publicId);
-      if (image && !usedExisting.has(publicId)) {
-        usedExisting.add(publicId);
-        ordered.push(image);
-      }
-      continue;
+function collectProductPublicIds(product) {
+  return [
+    product?.mainImage?.publicId,
+    ...(product?.gallery || []).map((image) => image.publicId),
+    ...(product?.banners || []).map((image) => image.publicId),
+    ...(product?.colorVariants || []).map((variant) => variant.mainImage?.publicId),
+    ...(product?.colorVariants || []).flatMap((variant) =>
+      (variant.gallery || []).map((image) => image.publicId)
+    )
+  ].filter(Boolean);
+}
+
+async function buildColorVariants({ slug, requestedVariants, variantMainFiles, variantGalleryFiles, currentProduct }) {
+  const candidateMap = collectCurrentImageCandidates(currentProduct);
+  const nextVariants = [];
+  const uploadedPublicIds = [];
+
+  for (const [index, variant] of requestedVariants.entries()) {
+    if (!Number.isFinite(variant.price) || variant.price < 0) {
+      const error = new Error(`Invalid price for color ${variant.name}.`);
+      error.status = 400;
+      throw error;
     }
 
-    if (item?.type === "new") {
-      const index = Number(item.index);
-      if (Number.isInteger(index) && index >= 0 && index < uploaded.length && !usedNew.has(index)) {
-        usedNew.add(index);
-        ordered.push(uploaded[index]);
-      }
+    if (variant.existingGallery.length + variant.newGallerySlots.length > 8) {
+      const error = new Error(`Color ${variant.name} can contain at most 8 gallery images.`);
+      error.status = 400;
+      throw error;
     }
+
+    let mainImage;
+
+    if (variant.mainImageSlot >= 0) {
+      const file = variantMainFiles[variant.mainImageSlot];
+      if (!file) {
+        const error = new Error(`Main image is missing for color ${variant.name}.`);
+        error.status = 400;
+        throw error;
+      }
+
+      const uploaded = await uploadBuffer(file.buffer, {
+        public_id: `${slug}-color-${createReadableSlug(variant.name) || index + 1}-main-${Date.now()}`
+      });
+      uploadedPublicIds.push(uploaded.publicId);
+      mainImage = mergeImageMeta(uploaded, variant.mainImageMeta);
+    } else if (variant.existingMainImage?.publicId) {
+      const existing = candidateMap.get(variant.existingMainImage.publicId);
+      if (!existing) {
+        const error = new Error(`Invalid existing main image for color ${variant.name}.`);
+        error.status = 400;
+        throw error;
+      }
+      mainImage = mergeImageMeta(existing, variant.existingMainImage);
+    } else {
+      const error = new Error(`Each color must include a main image. Missing in ${variant.name}.`);
+      error.status = 400;
+      throw error;
+    }
+
+    const retainedGallery = [];
+    const seenGallery = new Set();
+
+    for (const item of variant.existingGallery) {
+      if (!item.publicId || seenGallery.has(item.publicId)) continue;
+      const existing = candidateMap.get(item.publicId);
+      if (!existing) {
+        const error = new Error(`Invalid existing gallery image for color ${variant.name}.`);
+        error.status = 400;
+        throw error;
+      }
+      seenGallery.add(item.publicId);
+      retainedGallery.push(mergeImageMeta(existing, item));
+    }
+
+    const uploadedGallery = [];
+    for (const [galleryIndex, slot] of variant.newGallerySlots.entries()) {
+      const file = variantGalleryFiles[slot];
+      if (!file) {
+        const error = new Error(`Gallery image is missing for color ${variant.name}.`);
+        error.status = 400;
+        throw error;
+      }
+
+      const uploaded = await uploadBuffer(file.buffer, {
+        public_id: `${slug}-color-${createReadableSlug(variant.name) || index + 1}-gallery-${uploadedGallery.length + 1}-${Date.now()}`
+      });
+      uploadedPublicIds.push(uploaded.publicId);
+      uploadedGallery.push(mergeImageMeta(uploaded, variant.newGalleryMeta[galleryIndex] || {}));
+    }
+
+    nextVariants.push({
+      name: variant.name,
+      colorHex: variant.colorHex,
+      price: variant.price,
+      oldPrice: variant.oldPrice,
+      stock: variant.stock,
+      mainImage,
+      gallery: [...retainedGallery, ...uploadedGallery]
+    });
   }
 
-  retained.forEach((image) => {
-    if (!usedExisting.has(image.publicId)) ordered.push(image);
-  });
-  uploaded.forEach((image, index) => {
-    if (!usedNew.has(index)) ordered.push(image);
-  });
-
-  return ordered;
+  return { nextVariants, uploadedPublicIds };
 }
 
 export async function listPublicProducts(req, res) {
   const products = await Product.find({ active: true })
     .sort({ createdAt: -1 })
-    .select("name slug shortDescription price oldPrice currency mainImage features offers whatsappNumber createdAt");
+    .select("name slug shortDescription price oldPrice currency mainImage features offers whatsappNumber colorVariants createdAt");
 
   res.json({ products });
 }
@@ -244,39 +354,46 @@ export async function listAdminProducts(req, res) {
 }
 
 export async function createProduct(req, res) {
-  const mainFile = req.files?.mainImage?.[0];
-  if (!mainFile) {
-    return res.status(400).json({ message: "A main product image is required." });
-  }
-
   const uploadedPublicIds = [];
 
   try {
     const data = productDataFromBody(req.body);
-    data.slug = await uniqueSlug(req.body.slug);
+    data.slug = await uniqueSlug(data.name, req.body.slug);
 
-    const mainUploaded = await uploadBuffer(mainFile.buffer, {
-      public_id: `${data.slug}-main-${Date.now()}`
+    const requestedVariants = parseColorVariants(req.body.colorVariants);
+    const variantsResult = await buildColorVariants({
+      slug: data.slug,
+      requestedVariants,
+      variantMainFiles: req.files?.variantMainImages || [],
+      variantGalleryFiles: req.files?.variantGalleryImages || [],
+      currentProduct: null
     });
-    uploadedPublicIds.push(mainUploaded.publicId);
-    const mainImage = mergeImageMeta(mainUploaded, parseImageMeta(req.body.mainImageMeta, "mainImageMeta"));
-
-    const galleryFiles = req.files?.gallery || [];
-    const galleryMeta = parseImageMetaArray(req.body.galleryMeta, "galleryMeta");
-    const uploadedGallery = await uploadImages(galleryFiles, galleryMeta, data.slug, "gallery");
-    uploadedPublicIds.push(...uploadedGallery.map((image) => image.publicId));
-    const gallery = orderMediaItems([], uploadedGallery, req.body.galleryOrder, "galleryOrder");
+    uploadedPublicIds.push(...variantsResult.uploadedPublicIds);
 
     const bannerFiles = req.files?.banners || [];
-    const bannerMeta = parseImageMetaArray(req.body.bannerMeta, "bannerMeta");
-    const uploadedBanners = await uploadImages(bannerFiles, bannerMeta, data.slug, "banner");
-    uploadedPublicIds.push(...uploadedBanners.map((image) => image.publicId));
-    const banners = orderMediaItems([], uploadedBanners, req.body.bannerOrder, "bannerOrder");
+    const bannerMeta = parseJsonArray(req.body.bannerMeta, "bannerMeta").map(normalizeImageMeta);
+    if (bannerFiles.length > 6) {
+      const error = new Error("A product can contain at most 6 additional images.");
+      error.status = 400;
+      throw error;
+    }
+    const banners = await uploadImages(bannerFiles, bannerMeta, data.slug, "banner");
+    uploadedPublicIds.push(...banners.map((image) => image.publicId));
 
-    const product = await Product.create({ ...data, mainImage, gallery, banners });
+    const firstVariant = variantsResult.nextVariants[0];
+    const product = await Product.create({
+      ...data,
+      price: firstVariant.price,
+      oldPrice: firstVariant.oldPrice,
+      mainImage: firstVariant.mainImage,
+      gallery: firstVariant.gallery,
+      banners,
+      colorVariants: variantsResult.nextVariants
+    });
+
     res.status(201).json({ product });
   } catch (error) {
-    await Promise.allSettled(uploadedPublicIds.map((publicId) => deleteCloudinaryImage(publicId)));
+    await deleteCloudinaryImagesSafely(uploadedPublicIds);
     throw error;
   }
 }
@@ -286,80 +403,65 @@ export async function updateProduct(req, res) {
   if (!product) return res.status(404).json({ message: "Product not found." });
 
   const uploadedPublicIds = [];
-  const imagesToDelete = [];
+  const currentPublicIds = new Set(collectProductPublicIds(product));
 
   try {
     const data = productDataFromBody(req.body);
-    data.slug = await uniqueSlug(req.body.slug, product._id);
+    data.slug = await uniqueSlug(data.name, req.body.slug, product._id);
 
-    let mainImage;
-    const newMainFile = req.files?.mainImage?.[0];
-    const mainMeta = parseImageMeta(req.body.mainImageMeta, "mainImageMeta");
-
-    if (newMainFile) {
-      const uploaded = await uploadBuffer(newMainFile.buffer, {
-        public_id: `${data.slug}-main-${Date.now()}`
-      });
-      uploadedPublicIds.push(uploaded.publicId);
-      mainImage = mergeImageMeta(uploaded, mainMeta);
-      imagesToDelete.push(product.mainImage.publicId);
-    } else {
-      mainImage = mergeImageMeta(product.mainImage, mainMeta);
-    }
-
-    const currentGallery = (product.gallery || []).map(imageToPlain);
-    const requestedGallery = req.body.existingGallery === undefined
-      ? currentGallery.map((image) => ({ publicId: image.publicId, ...normalizeImageMeta(image) }))
-      : parseImageMetaArray(req.body.existingGallery, "existingGallery");
-    const galleryResult = retainExistingImages(currentGallery, requestedGallery, "existingGallery");
-    imagesToDelete.push(...galleryResult.removed.map((image) => image.publicId));
-
-    const newGalleryFiles = req.files?.gallery || [];
-    const newGalleryMeta = parseImageMetaArray(req.body.galleryMeta, "galleryMeta");
-    if (galleryResult.retained.length + newGalleryFiles.length > 8) {
-      const error = new Error("A product can contain at most 8 gallery images.");
-      error.status = 400;
-      throw error;
-    }
-    const uploadedGallery = await uploadImages(newGalleryFiles, newGalleryMeta, data.slug, "gallery");
-    uploadedPublicIds.push(...uploadedGallery.map((image) => image.publicId));
-    const gallery = orderMediaItems(
-      galleryResult.retained,
-      uploadedGallery,
-      req.body.galleryOrder,
-      "galleryOrder"
-    );
+    const requestedVariants = parseColorVariants(req.body.colorVariants);
+    const variantsResult = await buildColorVariants({
+      slug: data.slug,
+      requestedVariants,
+      variantMainFiles: req.files?.variantMainImages || [],
+      variantGalleryFiles: req.files?.variantGalleryImages || [],
+      currentProduct: product
+    });
+    uploadedPublicIds.push(...variantsResult.uploadedPublicIds);
 
     const currentBanners = (product.banners || []).map(imageToPlain);
     const requestedBanners = req.body.existingBanners === undefined
       ? currentBanners.map((image) => ({ publicId: image.publicId, ...normalizeImageMeta(image) }))
-      : parseImageMetaArray(req.body.existingBanners, "existingBanners");
-    const bannerResult = retainExistingImages(currentBanners, requestedBanners, "existingBanners");
-    imagesToDelete.push(...bannerResult.removed.map((image) => image.publicId));
+      : normalizeBannerMeta(req.body.existingBanners);
+    const retainedBanners = retainExistingImages(currentBanners, requestedBanners, "existingBanners");
 
     const newBannerFiles = req.files?.banners || [];
-    const newBannerMeta = parseImageMetaArray(req.body.bannerMeta, "bannerMeta");
-    if (bannerResult.retained.length + newBannerFiles.length > 6) {
-      const error = new Error("A product can contain at most 6 banner images.");
+    const newBannerMeta = parseJsonArray(req.body.bannerMeta, "bannerMeta").map(normalizeImageMeta);
+    if (retainedBanners.length + newBannerFiles.length > 6) {
+      const error = new Error("A product can contain at most 6 additional images.");
       error.status = 400;
       throw error;
     }
+
     const uploadedBanners = await uploadImages(newBannerFiles, newBannerMeta, data.slug, "banner");
     uploadedPublicIds.push(...uploadedBanners.map((image) => image.publicId));
-    const banners = orderMediaItems(
-      bannerResult.retained,
-      uploadedBanners,
-      req.body.bannerOrder,
-      "bannerOrder"
-    );
+    const banners = [...retainedBanners, ...uploadedBanners];
 
-    Object.assign(product, data, { mainImage, gallery, banners });
+    const firstVariant = variantsResult.nextVariants[0];
+    Object.assign(product, data, {
+      price: firstVariant.price,
+      oldPrice: firstVariant.oldPrice,
+      mainImage: firstVariant.mainImage,
+      gallery: firstVariant.gallery,
+      banners,
+      colorVariants: variantsResult.nextVariants
+    });
+
     await product.save();
 
-    await Promise.allSettled(imagesToDelete.map((publicId) => deleteCloudinaryImage(publicId)));
-    res.json({ product });
+    const nextPublicIds = new Set(collectProductPublicIds(product));
+    const imagesToDelete = [...currentPublicIds].filter((publicId) => !nextPublicIds.has(publicId));
+    const cleanup = await deleteCloudinaryImagesSafely(imagesToDelete);
+
+    res.json({
+      product,
+      cleanup: {
+        deleted: cleanup.deleted.length,
+        queued: cleanup.queued.length
+      }
+    });
   } catch (error) {
-    await Promise.allSettled(uploadedPublicIds.map((publicId) => deleteCloudinaryImage(publicId)));
+    await deleteCloudinaryImagesSafely(uploadedPublicIds);
     throw error;
   }
 }
@@ -388,13 +490,18 @@ export async function deleteProduct(req, res) {
   const product = await Product.findById(req.params.id);
   if (!product) return res.status(404).json({ message: "Product not found." });
 
-  const publicIds = [
-    product.mainImage?.publicId,
-    ...(product.gallery || []).map((image) => image.publicId),
-    ...(product.banners || []).map((image) => image.publicId)
-  ].filter(Boolean);
-
+  const publicIds = [...new Set(collectProductPublicIds(product))];
   await product.deleteOne();
-  await Promise.allSettled(publicIds.map((publicId) => deleteCloudinaryImage(publicId)));
-  res.json({ message: "Product deleted." });
+
+  const cleanup = await deleteCloudinaryImagesSafely(publicIds);
+
+  res.json({
+    message: cleanup.queued.length
+      ? "Product deleted. Some Cloudinary images were queued for automatic retry."
+      : "Product and all Cloudinary images deleted.",
+    cleanup: {
+      deleted: cleanup.deleted.length,
+      queued: cleanup.queued.length
+    }
+  });
 }

@@ -5,24 +5,22 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 import {
-  ArrowDown,
-  ArrowLeft,
-  ArrowRight,
-  ArrowUp,
   Box,
   CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
   Copy,
-  Crop,
   ExternalLink,
   Eye,
-  GripVertical,
   EyeOff,
-  ImageIcon,
   ImagePlus,
   Link2,
   LogOut,
   Move,
   PackagePlus,
+  Palette,
   Pencil,
   Plus,
   Power,
@@ -32,21 +30,40 @@ import {
   Save,
   Settings as SettingsIcon,
   Trash2,
-  Upload,
   X
 } from "lucide-react";
 import { apiFetch, formatPrice } from "@/lib/api";
 
-const emptyOffer = () => ({ label: "", quantity: "", price: "", savingsText: "" });
-const defaultImageMeta = () => ({ focusX: 50, focusY: 50, fit: "contain" });
 const MAX_IMAGE_SIZE_BYTES = 20 * 1024 * 1024;
+
+const emptyOffer = () => ({ label: "", quantity: "", price: "", savingsText: "" });
+const defaultImageMeta = () => ({ focusX: 50, focusY: 50, fit: "cover" });
+const imageMetaPayload = (image, includePublicId = false) => ({
+  ...(includePublicId ? { publicId: image.publicId } : {}),
+  focusX: Math.round(Number(image.focusX ?? 50)),
+  focusY: Math.round(Number(image.focusY ?? 50)),
+  fit: image.fit === "contain" ? "contain" : "cover"
+});
+const createVariant = () => ({
+  clientId: `variant-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  name: "",
+  colorHex: "#111827",
+  price: "",
+  oldPrice: "",
+  stock: "",
+  existingMainImage: null,
+  mainImage: null,
+  existingGallery: [],
+  gallery: []
+});
 
 function makeSlugPreview(value) {
   return String(value || "")
-    .normalize("NFKD")
+    .normalize("NFKC")
     .toLowerCase()
     .trim()
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[\u064B-\u065F\u0670]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 120);
 }
@@ -57,8 +74,8 @@ function normalizeStoredImage(image) {
     ...image,
     focusX: Number.isFinite(Number(image.focusX)) ? Number(image.focusX) : 50,
     focusY: Number.isFinite(Number(image.focusY)) ? Number(image.focusY) : 50,
-    fit: "contain",
-    localId: image.publicId
+    fit: image.fit === "contain" ? "contain" : "cover",
+    localId: image.publicId || `stored-${Math.random().toString(36).slice(2)}`
   };
 }
 
@@ -72,63 +89,20 @@ function createLocalImage(file) {
   };
 }
 
-function imageMetaPayload(image, includePublicId = false) {
-  return {
-    ...(includePublicId ? { publicId: image.publicId } : {}),
-    focusX: Math.round(Number(image.focusX ?? 50)),
-    focusY: Math.round(Number(image.focusY ?? 50)),
-    fit: "contain"
-  };
-}
-
-function mediaKeys(kind) {
-  return kind === "gallery"
-    ? { existingKey: "existingGallery", newKey: "gallery", orderKey: "galleryOrder" }
-    : { existingKey: "existingBanners", newKey: "banners", orderKey: "bannerOrder" };
-}
-
-function orderedMedia(form, kind) {
-  const { existingKey, newKey, orderKey } = mediaKeys(kind);
-  const all = [...form[existingKey], ...form[newKey]];
-  const byId = new Map(all.map((image) => [image.localId, image]));
-  const ordered = (form[orderKey] || []).map((id) => byId.get(id)).filter(Boolean);
-  const included = new Set(ordered.map((image) => image.localId));
-  return [...ordered, ...all.filter((image) => !included.has(image.localId))];
-}
-
-function buildMediaOrderPayload(form, kind) {
-  const { existingKey, newKey } = mediaKeys(kind);
-  const existingMap = new Map(form[existingKey].map((image) => [image.localId, image]));
-  const newIndexMap = new Map(form[newKey].map((image, index) => [image.localId, index]));
-
-  return orderedMedia(form, kind).map((image) => {
-    const existing = existingMap.get(image.localId);
-    if (existing) return { type: "existing", publicId: existing.publicId };
-    return { type: "new", index: newIndexMap.get(image.localId) };
-  });
-}
-
 const initialForm = () => ({
   id: "",
   name: "",
   slug: "",
   shortDescription: "",
   description: "",
-  price: "",
-  oldPrice: "",
   currency: "",
   videoUrl: "",
   featuresText: "",
   active: true,
-  existingMainImage: null,
-  mainImage: null,
-  existingGallery: [],
-  gallery: [],
-  galleryOrder: [],
   existingBanners: [],
   banners: [],
-  bannerOrder: [],
-  offers: [emptyOffer()]
+  offers: [emptyOffer()],
+  colorVariants: []
 });
 
 export default function AdminDashboardPage() {
@@ -146,7 +120,6 @@ export default function AdminDashboardPage() {
 
   useEffect(() => {
     setSiteOrigin(window.location.origin);
-
     const storedToken = localStorage.getItem("admin_token");
     if (!storedToken) {
       router.replace("/admin/login");
@@ -205,37 +178,48 @@ export default function AdminDashboardPage() {
   }
 
   function startEdit(product) {
-    const existingGallery = (product.gallery || []).map(normalizeStoredImage);
-    const existingBanners = (product.banners || []).map(normalizeStoredImage);
-
     setForm({
       id: product._id,
       name: product.name || "",
       slug: product.slug || "",
       shortDescription: product.shortDescription || "",
       description: product.description || "",
-      price: product.price ?? "",
-      oldPrice: product.oldPrice ?? "",
-      currency: product.currency || "",
+      currency: product.currency || "دج",
       videoUrl: product.videoUrl || "",
       featuresText: (product.features || []).join("\n"),
       active: Boolean(product.active),
-      existingMainImage: normalizeStoredImage(product.mainImage),
-      mainImage: null,
-      existingGallery,
-      gallery: [],
-      galleryOrder: existingGallery.map((image) => image.localId),
-      existingBanners,
+      existingBanners: (product.banners || []).map(normalizeStoredImage),
       banners: [],
-      bannerOrder: existingBanners.map((image) => image.localId),
       offers: product.offers?.length
         ? product.offers.map((offer) => ({
-            label: offer.label,
-            quantity: offer.quantity,
-            price: offer.price,
+            label: offer.label || "",
+            quantity: offer.quantity ?? "",
+            price: offer.price ?? "",
             savingsText: offer.savingsText || ""
           }))
-        : [emptyOffer()]
+        : [emptyOffer()],
+      colorVariants: product.colorVariants?.length
+        ? product.colorVariants.map((variant) => ({
+            clientId: variant._id || `variant-${Math.random().toString(36).slice(2)}`,
+            name: variant.name || "",
+            colorHex: variant.colorHex || "#111827",
+            price: variant.price ?? "",
+            oldPrice: variant.oldPrice ?? "",
+            stock: variant.stock ?? 0,
+            existingMainImage: normalizeStoredImage(variant.mainImage),
+            mainImage: null,
+            existingGallery: (variant.gallery || []).map(normalizeStoredImage),
+            gallery: []
+          }))
+        : [{
+            ...createVariant(),
+            name: "الافتراضي",
+            price: product.price ?? "",
+            oldPrice: product.oldPrice ?? "",
+            stock: 0,
+            existingMainImage: normalizeStoredImage(product.mainImage),
+            existingGallery: (product.gallery || []).map(normalizeStoredImage)
+          }]
     });
     setStatus((current) => ({ ...current, error: "", success: "" }));
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -246,186 +230,226 @@ export default function AdminDashboardPage() {
     setStatus((current) => ({ ...current, error: "", success: "" }));
   }
 
-  function selectMainImage(file) {
-    if (!file) return;
-    setForm((current) => ({ ...current, mainImage: createLocalImage(file) }));
-  }
-
   function addImages(files, target, max) {
     const selected = Array.from(files || []);
     if (!selected.length) return;
 
     const oversized = selected.filter((file) => file.size > MAX_IMAGE_SIZE_BYTES);
     const validFiles = selected.filter((file) => file.size <= MAX_IMAGE_SIZE_BYTES);
-    const kind = target === "gallery" ? "gallery" : "banners";
-    const { existingKey, orderKey } = mediaKeys(kind === "gallery" ? "gallery" : "banners");
-    const currentTotal = form[existingKey].length + form[target].length;
-    const available = Math.max(0, max - currentTotal);
-    const accepted = validFiles.slice(0, available).map(createLocalImage);
 
-    setForm((current) => ({
-      ...current,
-      [target]: [...current[target], ...accepted],
-      [orderKey]: [...current[orderKey], ...accepted.map((image) => image.localId)]
-    }));
-
-    if (oversized.length || validFiles.length > available) {
-      const messages = [];
-      if (oversized.length) messages.push(`تم تجاهل ${oversized.length} صورة لأن حجم الصورة يتجاوز 20MB.`);
-      if (validFiles.length > available) messages.push(`الحد الأقصى ${max} صور. تمت إضافة ${accepted.length} صورة فقط.`);
-      setStatus((old) => ({ ...old, error: messages.join(" "), success: "" }));
-    }
-  }
-
-  function updateManagedImage(target, localId, patch) {
     setForm((current) => {
-      if (target === "mainImage" || target === "existingMainImage") {
-        return {
-          ...current,
-          [target]: current[target] ? { ...current[target], ...patch } : current[target]
-        };
+      const currentTotal = current.existingBanners.length + current.banners.length;
+      const available = Math.max(0, max - currentTotal);
+      const accepted = validFiles.slice(0, available).map(createLocalImage);
+
+      if (oversized.length || validFiles.length > available) {
+        const messages = [];
+        if (oversized.length) messages.push(`تم تجاهل ${oversized.length} صورة لأن الحجم أكبر من 20MB.`);
+        if (validFiles.length > available) messages.push(`الحد الأقصى ${max} صور.`);
+        setStatus((old) => ({ ...old, error: messages.join(" "), success: "" }));
       }
 
-      return {
-        ...current,
-        [target]: current[target].map((image) =>
-          image.localId === localId ? { ...image, ...patch } : image
-        )
-      };
+      return { ...current, [target]: [...current[target], ...accepted] };
     });
   }
 
   function removeManagedImage(target, localId) {
-    setForm((current) => {
-      if (target === "mainImage") return { ...current, mainImage: null };
-
-      const orderKey =
-        target === "existingGallery" || target === "gallery"
-          ? "galleryOrder"
-          : target === "existingBanners" || target === "banners"
-            ? "bannerOrder"
-            : null;
-
-      return {
-        ...current,
-        [target]: current[target].filter((image) => image.localId !== localId),
-        ...(orderKey
-          ? { [orderKey]: current[orderKey].filter((id) => id !== localId) }
-          : {})
-      };
-    });
+    setForm((current) => ({
+      ...current,
+      [target]: current[target].filter((image) => image.localId !== localId)
+    }));
   }
 
-  function moveMedia(kind, localId, direction) {
-    const { orderKey } = mediaKeys(kind);
-    setForm((current) => {
-      const normalizedOrder = orderedMedia(current, kind).map((image) => image.localId);
-      const currentIndex = normalizedOrder.indexOf(localId);
-      const nextIndex = currentIndex + direction;
-      if (currentIndex < 0 || nextIndex < 0 || nextIndex >= normalizedOrder.length) return current;
-
-      const nextOrder = [...normalizedOrder];
-      const [item] = nextOrder.splice(currentIndex, 1);
-      nextOrder.splice(nextIndex, 0, item);
-      return { ...current, [orderKey]: nextOrder };
-    });
+  function updateManagedImage(target, localId, patch) {
+    setForm((current) => ({
+      ...current,
+      [target]: current[target].map((image) =>
+        image.localId === localId ? { ...image, ...patch } : image
+      )
+    }));
   }
 
-  function dropMedia(kind, draggedId, targetId) {
-    if (!draggedId || !targetId || draggedId === targetId) return;
-    const { orderKey } = mediaKeys(kind);
+  function addColorVariant() {
+    setForm((current) => ({ ...current, colorVariants: [...current.colorVariants, createVariant()] }));
+  }
 
-    setForm((current) => {
-      const nextOrder = orderedMedia(current, kind).map((image) => image.localId);
-      const fromIndex = nextOrder.indexOf(draggedId);
-      const toIndex = nextOrder.indexOf(targetId);
-      if (fromIndex < 0 || toIndex < 0) return current;
+  function updateColorVariant(clientId, field, value) {
+    setForm((current) => ({
+      ...current,
+      colorVariants: current.colorVariants.map((variant) =>
+        variant.clientId === clientId ? { ...variant, [field]: value } : variant
+      )
+    }));
+  }
 
-      const [item] = nextOrder.splice(fromIndex, 1);
-      nextOrder.splice(toIndex, 0, item);
-      return { ...current, [orderKey]: nextOrder };
-    });
+  function removeColorVariant(clientId) {
+    setForm((current) => ({
+      ...current,
+      colorVariants: current.colorVariants.filter((variant) => variant.clientId !== clientId)
+    }));
+  }
+
+  function selectVariantMainImage(clientId, file) {
+    if (!file) return;
+    setForm((current) => ({
+      ...current,
+      colorVariants: current.colorVariants.map((variant) =>
+        variant.clientId === clientId
+          ? { ...variant, mainImage: createLocalImage(file) }
+          : variant
+      )
+    }));
+  }
+
+  function addVariantGalleryImages(clientId, files) {
+    const selected = Array.from(files || []);
+    if (!selected.length) return;
+    const oversized = selected.filter((file) => file.size > MAX_IMAGE_SIZE_BYTES);
+    const validFiles = selected.filter((file) => file.size <= MAX_IMAGE_SIZE_BYTES);
+
+    setForm((current) => ({
+      ...current,
+      colorVariants: current.colorVariants.map((variant) => {
+        if (variant.clientId !== clientId) return variant;
+        const currentTotal = variant.existingGallery.length + variant.gallery.length;
+        const available = Math.max(0, 8 - currentTotal);
+        const accepted = validFiles.slice(0, available).map(createLocalImage);
+        if (oversized.length || validFiles.length > available) {
+          const messages = [];
+          if (oversized.length) messages.push(`تم تجاهل ${oversized.length} صورة للون ${variant.name || "الجديد"} لأن الحجم أكبر من 20MB.`);
+          if (validFiles.length > available) messages.push(`الحد الأقصى 8 صور معرض لكل لون.`);
+          setStatus((old) => ({ ...old, error: messages.join(" "), success: "" }));
+        }
+        return { ...variant, gallery: [...variant.gallery, ...accepted] };
+      })
+    }));
+  }
+
+  function removeVariantImage(clientId, target, localId) {
+    setForm((current) => ({
+      ...current,
+      colorVariants: current.colorVariants.map((variant) => {
+        if (variant.clientId !== clientId) return variant;
+        if (target === "mainImage") return { ...variant, mainImage: null };
+        if (target === "existingMainImage") return { ...variant, existingMainImage: null };
+        return { ...variant, [target]: variant[target].filter((image) => image.localId !== localId) };
+      })
+    }));
+  }
+
+  function updateVariantImage(clientId, target, localId, patch) {
+    setForm((current) => ({
+      ...current,
+      colorVariants: current.colorVariants.map((variant) => {
+        if (variant.clientId !== clientId) return variant;
+        if (target === "mainImage" || target === "existingMainImage") {
+          return {
+            ...variant,
+            [target]: variant[target] ? { ...variant[target], ...patch } : variant[target]
+          };
+        }
+        return {
+          ...variant,
+          [target]: variant[target].map((image) =>
+            image.localId === localId ? { ...image, ...patch } : image
+          )
+        };
+      })
+    }));
   }
 
   async function saveProduct(event) {
     event.preventDefault();
     setStatus((current) => ({ ...current, saving: true, error: "", success: "" }));
 
-    if (!form.id && !form.mainImage) {
-      setStatus((current) => ({ ...current, saving: false, error: "اختر الصورة الرئيسية للمنتج." }));
-      return;
-    }
-
-    const effectiveMainImage = form.mainImage || form.existingMainImage;
-    if (!effectiveMainImage) {
-      setStatus((current) => ({ ...current, saving: false, error: "يجب أن يكون للمنتج صورة رئيسية." }));
-      return;
-    }
-
-    const cleanSlug = makeSlugPreview(form.slug);
-    if (!cleanSlug) {
-      setStatus((current) => ({
-        ...current,
-        saving: false,
-        error: "اكتب اسم رابط المنتج بالإنجليزية، مثل: samsung-galaxy-s26-ultra."
-      }));
-      return;
-    }
-
-    const isEditing = Boolean(form.id);
-
     try {
-      const payload = new FormData();
-      [
-        "name",
-        "slug",
-        "shortDescription",
-        "description",
-        "price",
-        "oldPrice",
-        "currency",
-        "videoUrl"
-      ].forEach((field) =>
-        payload.append(field, field === "slug" ? cleanSlug : form[field] ?? "")
-      );
+      const isEditing = Boolean(form.id);
+      const variantsWithNames = form.colorVariants.filter((variant) => variant.name.trim());
+      if (!variantsWithNames.length) throw new Error("أضف لونًا واحدًا على الأقل للمنتج.");
+      for (const variant of variantsWithNames) {
+        if (!Number.isFinite(Number(variant.price)) || Number(variant.price) < 0) {
+          throw new Error(`أدخل سعرًا صحيحًا للون ${variant.name || "الجديد"}.`);
+        }
+        const hasMain = variant.mainImage || variant.existingMainImage;
+        if (!hasMain) throw new Error(`اختر صورة رئيسية للون ${variant.name || "الجديد"}.`);
+      }
 
+      const payload = new FormData();
+      payload.append("name", form.name.trim());
+      payload.append("slug", form.slug.trim());
+      payload.append("shortDescription", form.shortDescription.trim());
+      payload.append("description", form.description.trim());
+      payload.append("currency", form.currency.trim() || "دج");
+      payload.append("videoUrl", form.videoUrl.trim());
       payload.append("active", String(form.active));
-      payload.append("mainImageMeta", JSON.stringify(imageMetaPayload(effectiveMainImage)));
-      payload.append(
-        "existingGallery",
-        JSON.stringify(form.existingGallery.map((image) => imageMetaPayload(image, true)))
-      );
-      payload.append("galleryMeta", JSON.stringify(form.gallery.map((image) => imageMetaPayload(image))));
-      payload.append("galleryOrder", JSON.stringify(buildMediaOrderPayload(form, "gallery")));
-      payload.append(
-        "existingBanners",
-        JSON.stringify(form.existingBanners.map((image) => imageMetaPayload(image, true)))
-      );
-      payload.append("bannerMeta", JSON.stringify(form.banners.map((image) => imageMetaPayload(image))));
-      payload.append("bannerOrder", JSON.stringify(buildMediaOrderPayload(form, "banners")));
       payload.append(
         "features",
-        JSON.stringify(form.featuresText.split("\n").map((item) => item.trim()).filter(Boolean))
+        JSON.stringify(
+          form.featuresText
+            .split(/\n+/)
+            .map((item) => item.trim())
+            .filter(Boolean)
+        )
       );
       payload.append(
         "offers",
         JSON.stringify(
           form.offers
-            .filter((offer) => offer.label.trim() && offer.price !== "")
             .map((offer) => ({
               label: offer.label.trim(),
               quantity: Number(offer.quantity || 1),
               price: Number(offer.price),
               savingsText: offer.savingsText.trim()
             }))
+            .filter((offer) => offer.label && Number.isFinite(offer.price))
         )
       );
 
-      if (form.mainImage?.file) payload.append("mainImage", form.mainImage.file);
-      form.gallery.forEach((image) => payload.append("gallery", image.file));
+      payload.append(
+        "existingBanners",
+        JSON.stringify(form.existingBanners.map((image) => imageMetaPayload(image, true)))
+      );
+      payload.append("bannerMeta", JSON.stringify(form.banners.map((image) => imageMetaPayload(image))));
+
       form.banners.forEach((image) => payload.append("banners", image.file));
 
-      await apiFetch(form.id ? `/products/${form.id}` : "/products", {
+      let variantMainIndex = 0;
+      let variantGalleryIndex = 0;
+      const colorVariantsPayload = variantsWithNames.map((variant) => {
+        let mainImageSlot = -1;
+        if (variant.mainImage?.file) {
+          payload.append("variantMainImages", variant.mainImage.file);
+          mainImageSlot = variantMainIndex;
+          variantMainIndex += 1;
+        }
+
+        const newGallerySlots = [];
+        variant.gallery.forEach((image) => {
+          payload.append("variantGalleryImages", image.file);
+          newGallerySlots.push(variantGalleryIndex);
+          variantGalleryIndex += 1;
+        });
+
+        return {
+          clientId: variant.clientId,
+          name: variant.name.trim(),
+          colorHex: variant.colorHex || "#111827",
+          price: Number(variant.price || 0),
+          oldPrice: variant.oldPrice === "" ? null : Number(variant.oldPrice),
+          stock: Math.max(0, Number(variant.stock || 0)),
+          existingMainImage: variant.existingMainImage
+            ? imageMetaPayload(variant.existingMainImage, true)
+            : null,
+          existingGallery: variant.existingGallery.map((image) => imageMetaPayload(image, true)),
+          mainImageSlot,
+          mainImageMeta: variant.mainImage ? imageMetaPayload(variant.mainImage) : defaultImageMeta(),
+          newGallerySlots,
+          newGalleryMeta: variant.gallery.map((image) => imageMetaPayload(image))
+        };
+      });
+      payload.append("colorVariants", JSON.stringify(colorVariantsPayload));
+
+      const saved = await apiFetch(form.id ? `/products/${form.id}` : "/products", {
         method: form.id ? "PUT" : "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: payload
@@ -433,36 +457,40 @@ export default function AdminDashboardPage() {
 
       setForm(initialForm());
       await loadProducts();
+      const cleanupQueued = Number(saved.cleanup?.queued || 0);
       setStatus((current) => ({
         ...current,
         saving: false,
-        success: isEditing ? "تم حفظ تعديلات المنتج والصور بنجاح." : "تمت إضافة المنتج ونشره بنجاح."
+        success: cleanupQueued
+          ? `تم الحفظ وتم تسجيل ${cleanupQueued} صورة قديمة للحذف التلقائي من Cloudinary.`
+          : isEditing
+            ? "تم حفظ التعديلات وحذف الصور القديمة من Cloudinary."
+            : "تمت إضافة المنتج ونشره بنجاح."
       }));
     } catch (error) {
-      setStatus((current) => ({ ...current, saving: false, error: error.message }));
+      setStatus((current) => ({ ...current, saving: false, error: error.message || "تعذر حفظ المنتج." }));
     }
   }
 
   function productUrl(slug) {
-    const path = `/product/${slug || ""}`;
+    const path = `/product/${encodeURIComponent(slug || "")}`;
     return siteOrigin ? `${siteOrigin}${path}` : path;
   }
 
   async function copyProductLink(product) {
-    const url = `${window.location.origin}/product/${product.slug}`;
+    const url = `${window.location.origin}/product/${encodeURIComponent(product.slug)}`;
     try {
       await navigator.clipboard.writeText(url);
       setStatus((current) => ({ ...current, success: "تم نسخ رابط المنتج.", error: "" }));
     } catch {
-      setStatus((current) => ({ ...current, error: "تعذر نسخ الرابط تلقائيًا. افتح المنتج وانسخ الرابط يدويًا." }));
+      setStatus((current) => ({ ...current, error: "تعذر نسخ الرابط تلقائيًا." }));
     }
   }
 
   async function toggleProductStatus(product) {
     const nextActive = !product.active;
     const actionLabel = nextActive ? "تفعيل" : "تعطيل";
-
-    if (!confirm(`${actionLabel} المنتج: ${product.name}؟`)) return;
+    if (!confirm(`${actionLabel} المنتج ${product.name}؟`)) return;
 
     try {
       const data = await apiFetch(`/products/${product._id}/status`, {
@@ -474,35 +502,36 @@ export default function AdminDashboardPage() {
         body: JSON.stringify({ active: nextActive })
       });
 
-      setProducts((current) =>
-        current.map((item) => (item._id === product._id ? data.product : item))
-      );
+      setProducts((current) => current.map((item) => (item._id === product._id ? data.product : item)));
       setStatus((current) => ({
         ...current,
         error: "",
-        success: nextActive ? "تم تفعيل المنتج وإظهاره للعملاء." : "تم تعطيل المنتج وإخفاؤه عن العملاء."
+        success: nextActive ? "تم تفعيل المنتج وإظهاره." : "تم تعطيل المنتج وإخفاؤه."
       }));
-
-      if (form.id === product._id) {
-        setForm((current) => ({ ...current, active: nextActive }));
-      }
     } catch (error) {
-      setStatus((current) => ({ ...current, error: error.message, success: "" }));
+      setStatus((current) => ({ ...current, error: error.message || "تعذر تحديث حالة المنتج.", success: "" }));
     }
   }
 
   async function deleteProduct(product) {
-    if (!confirm(`حذف المنتج: ${product.name}؟ سيتم حذف صوره من Cloudinary أيضًا.`)) return;
-
+    if (!confirm(`حذف المنتج ${product.name}؟ سيتم حذف الصور المرتبطة أيضًا.`)) return;
     try {
-      await apiFetch(`/products/${product._id}`, {
+      const result = await apiFetch(`/products/${product._id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` }
       });
       if (form.id === product._id) resetForm();
       await loadProducts();
+      const cleanupQueued = Number(result.cleanup?.queued || 0);
+      setStatus((current) => ({
+        ...current,
+        success: cleanupQueued
+          ? `تم حذف المنتج وتم تسجيل ${cleanupQueued} صورة للحذف التلقائي من Cloudinary.`
+          : "تم حذف المنتج وكل صوره من Cloudinary.",
+        error: ""
+      }));
     } catch (error) {
-      setStatus((current) => ({ ...current, error: error.message }));
+      setStatus((current) => ({ ...current, error: error.message || "تعذر حذف المنتج." }));
     }
   }
 
@@ -510,11 +539,7 @@ export default function AdminDashboardPage() {
     return <main className="grid min-h-screen place-items-center bg-slate-950 text-sm font-black text-white">جارٍ فتح لوحة التحكم...</main>;
   }
 
-  const mainPreview = form.mainImage || form.existingMainImage;
-  const galleryImages = orderedMedia(form, "gallery");
-  const bannerImages = orderedMedia(form, "banners");
-  const galleryCount = galleryImages.length;
-  const bannersCount = bannerImages.length;
+  const bannersCount = form.existingBanners.length + form.banners.length;
 
   return (
     <main className="min-h-screen bg-slate-100">
@@ -526,19 +551,11 @@ export default function AdminDashboardPage() {
               <h1 className="mt-1 text-xl font-black text-slate-950 sm:text-2xl">إدارة المنتجات</h1>
             </div>
             <div className="flex items-center gap-2">
-              <Link
-                href="/admin/settings"
-                className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 sm:px-4 sm:text-sm"
-                title="الضبط"
-              >
+              <Link href="/admin/settings" className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 sm:px-4 sm:text-sm">
                 <SettingsIcon size={18} />
                 <span>الضبط</span>
               </Link>
-              <button
-                onClick={logout}
-                className="inline-flex h-11 items-center gap-2 rounded-xl border border-red-100 bg-red-50 px-3 text-xs font-black text-red-700 transition hover:bg-red-100 sm:px-4 sm:text-sm"
-                title="تسجيل الخروج"
-              >
+              <button onClick={logout} className="inline-flex h-11 items-center gap-2 rounded-xl border border-red-100 bg-red-50 px-3 text-xs font-black text-red-700 transition hover:bg-red-100 sm:px-4 sm:text-sm">
                 <LogOut size={18} />
                 <span className="hidden sm:inline">تسجيل الخروج</span>
               </button>
@@ -553,7 +570,7 @@ export default function AdminDashboardPage() {
             <StatCard icon={EyeOff} label="منتجات مخفية" value={hiddenCount} className="bg-white text-slate-950" />
           </section>
 
-          <div className="mt-6 grid items-start gap-6 2xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,.8fr)]">
+          <div className="mt-6 grid items-start gap-6 2xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,.8fr)]">
             <form onSubmit={saveProduct} className="admin-surface overflow-hidden">
               <div className="flex items-center justify-between gap-4 border-b border-slate-100 p-5 sm:p-6">
                 <div>
@@ -571,189 +588,189 @@ export default function AdminDashboardPage() {
 
               <div className="space-y-6 p-5 sm:p-6">
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <Input label="اسم المنتج" name="name" value={form.name} onChange={updateField} required placeholder="مثال: سامسونج جالاكسي S26 ألترا" />
-                  <Input
-                    label="اسم رابط المنتج بالإنجليزية"
-                    name="slug"
-                    value={form.slug}
-                    onChange={updateField}
-                    required
-                    dir="ltr"
-                    inputMode="url"
-                    placeholder="samsung-galaxy-s26-ultra"
-                  />
+                  <Input label="اسم المنتج" name="name" value={form.name} onChange={updateField} required placeholder="مثال جراب حماية مع حامل" />
+                  <Input label="اسم الرابط" name="slug" value={form.slug} onChange={updateField} placeholder="اكتب رابطًا مخصصًا" />
                   <div className="sm:col-span-2 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-3">
                     <div className="flex items-center gap-2 text-xs font-black text-emerald-800">
                       <Link2 size={15} /> رابط صفحة المنتج
                     </div>
                     <code dir="ltr" className="mt-2 block min-h-[40px] break-all rounded-xl bg-white px-3 py-2 text-left text-xs font-bold leading-6 text-slate-600">
-                      {makeSlugPreview(form.slug)
-                        ? productUrl(makeSlugPreview(form.slug))
-                        : ""}
+                      {makeSlugPreview(form.slug || form.name) ? productUrl(makeSlugPreview(form.slug || form.name)) : ""}
                     </code>
-                    <p className="mt-2 text-[11px] font-bold leading-5 text-emerald-700">
-                      اكتب اسمًا إنجليزيًا قصيرًا للرابط. المسافات تتحول تلقائيًا إلى شرطات.
-                    </p>
                   </div>
-                  <Input label="السعر الحالي" name="price" type="number" min="0" step="0.01" value={form.price} onChange={updateField} required />
-                  <Input label="السعر قبل الخصم" name="oldPrice" type="number" min="0" step="0.01" value={form.oldPrice} onChange={updateField} />
                   <Input label="العملة" name="currency" value={form.currency} onChange={updateField} />
                   <div className="sm:col-span-2">
-                    <Input label="وصف قصير يظهر تحت الاسم" name="shortDescription" value={form.shortDescription} onChange={updateField} maxLength={240} />
+                    <Input label="وصف قصير" name="shortDescription" value={form.shortDescription} onChange={updateField} maxLength={240} />
                   </div>
                   <div className="sm:col-span-2">
                     <Textarea label="تفاصيل المنتج" name="description" value={form.description} onChange={updateField} rows={5} />
                   </div>
                   <div className="sm:col-span-2">
-                    <Textarea label="المميزات — ميزة في كل سطر" name="featuresText" value={form.featuresText} onChange={updateField} rows={5} placeholder={"مقاوم للصدمات\nخامة عالية الجودة\nمتوفر بأكثر من لون"} />
+                    <Textarea label="المميزات ميزة في كل سطر" name="featuresText" value={form.featuresText} onChange={updateField} rows={5} />
                   </div>
                   <div className="sm:col-span-2">
-                    <Input
-                      label="رابط فيديو المنتج — اختياري"
-                      name="videoUrl"
-                      value={form.videoUrl}
-                      onChange={updateField}
-                      placeholder="رابط YouTube أو Google Drive أو رابط فيديو مباشر"
-                      dir="ltr"
-                      inputMode="url"
-                    />
-                    <p className="mt-2 text-[11px] font-bold leading-5 text-slate-500">
-                      يدعم روابط YouTube، وروابط ملفات الفيديو على Google Drive، وروابط MP4 المباشرة.
-                    </p>
+                    <Input label="رابط فيديو مباشر اختياري" name="videoUrl" value={form.videoUrl} onChange={updateField} placeholder="https://.../video.mp4" />
                   </div>
                 </div>
 
                 <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
                   <div className="flex items-center justify-between gap-3">
                     <div>
+                      <h3 className="flex items-center gap-2 font-black text-slate-950"><Palette size={18} /> الألوان التفاعلية</h3>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">أضف لونًا مع سعره ومخزونه وصورته الرئيسية وصور معرضه. الصور الإضافية الثابتة لا تتغير.</p>
+                    </div>
+                    <button type="button" onClick={addColorVariant} className="inline-flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-black text-slate-700 shadow-sm">
+                      <Plus size={15} /> لون جديد
+                    </button>
+                  </div>
+
+                  <div className="mt-4 space-y-4">
+                    {!form.colorVariants.length ? <EmptyImages text="لا توجد ألوان مضافة حتى الآن." /> : null}
+                    {form.colorVariants.map((variant, index) => {
+                      const variantMain = variant.mainImage || variant.existingMainImage;
+                      const variantGalleryImages = [...variant.existingGallery, ...variant.gallery];
+                      return (
+                        <article key={variant.clientId} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <span className="inline-block h-10 w-10 rounded-full border-2 border-white shadow" style={{ backgroundColor: variant.colorHex || "#111827" }} />
+                              <div>
+                                <h4 className="font-black text-slate-950">اللون {index + 1}</h4>
+                                <p className="text-xs font-bold text-slate-500">اختيار اللون يظهر للعميل على شكل أيقونة جميلة</p>
+                              </div>
+                            </div>
+                            <button type="button" onClick={() => removeColorVariant(variant.clientId)} className="inline-flex items-center gap-1 rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700">
+                              <Trash2 size={14} /> حذف اللون
+                            </button>
+                          </div>
+
+                          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                            <Input label="اسم اللون" value={variant.name} onChange={(event) => updateColorVariant(variant.clientId, "name", event.target.value)} placeholder="مثل أسود أو أزرق" />
+                            <label className="block space-y-2">
+                              <span className="text-sm font-black text-slate-900">لون الأيقونة</span>
+                              <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-2">
+                                <input type="color" value={variant.colorHex} onChange={(event) => updateColorVariant(variant.clientId, "colorHex", event.target.value)} className="h-10 w-16 cursor-pointer rounded border-0 bg-transparent p-0" />
+                                <span dir="ltr" className="text-sm font-bold text-slate-600">{variant.colorHex}</span>
+                              </div>
+                            </label>
+                            <Input label="سعر هذا اللون" type="number" min="0" step="0.01" value={variant.price} onChange={(event) => updateColorVariant(variant.clientId, "price", event.target.value)} />
+                            <Input label="السعر قبل الخصم" type="number" min="0" step="0.01" value={variant.oldPrice} onChange={(event) => updateColorVariant(variant.clientId, "oldPrice", event.target.value)} />
+                            <Input label="المخزون" type="number" min="0" step="1" value={variant.stock} onChange={(event) => updateColorVariant(variant.clientId, "stock", event.target.value)} />
+                          </div>
+
+                          <div className="mt-5 grid gap-5 lg:grid-cols-2">
+                            <div>
+                              <label className="mb-2 block text-sm font-black text-slate-900">الصورة الرئيسية لهذا اللون</label>
+                              <FileInput label="اختيار الصورة الرئيسية للون" onChange={(event) => selectVariantMainImage(variant.clientId, event.target.files?.[0])} />
+                              {variantMain ? (
+                                <ImageEditorCard
+                                  image={variantMain}
+                                  kind="main"
+                                  title={variant.name || "صورة اللون"}
+                                  onChange={(patch) => updateVariantImage(
+                                    variant.clientId,
+                                    variant.mainImage ? "mainImage" : "existingMainImage",
+                                    variantMain.localId,
+                                    patch
+                                  )}
+                                  onRemove={() => removeVariantImage(
+                                    variant.clientId,
+                                    variant.mainImage ? "mainImage" : "existingMainImage",
+                                    variantMain.localId
+                                  )}
+                                />
+                              ) : (
+                                <EmptyImages text="لا توجد صورة رئيسية لهذا اللون." />
+                              )}
+                            </div>
+                            <div>
+                              <label className="mb-2 block text-sm font-black text-slate-900">صور معرض هذا اللون ({variantGalleryImages.length}/8)</label>
+                              <FileInput label="إضافة صور معرض للون" multiple onChange={(event) => { addVariantGalleryImages(variant.clientId, event.target.files); event.target.value = ""; }} />
+                              <div className="mt-4 space-y-4">
+                                {variant.existingGallery.map((image) => (
+                                  <ImageEditorCard
+                                    key={image.localId}
+                                    image={image}
+                                    kind="gallery"
+                                    title={`صورة معرض ${variant.name || "اللون"}`}
+                                    onChange={(patch) => updateVariantImage(variant.clientId, "existingGallery", image.localId, patch)}
+                                    onRemove={() => removeVariantImage(variant.clientId, "existingGallery", image.localId)}
+                                  />
+                                ))}
+                                {variant.gallery.map((image) => (
+                                  <ImageEditorCard
+                                    key={image.localId}
+                                    image={image}
+                                    kind="gallery"
+                                    title={`صورة معرض جديدة ${variant.name || "للون"}`}
+                                    onChange={(patch) => updateVariantImage(variant.clientId, "gallery", image.localId, patch)}
+                                    onRemove={() => removeVariantImage(variant.clientId, "gallery", image.localId)}
+                                  />
+                                ))}
+                                {!variantGalleryImages.length ? <EmptyImages text="لا توجد صور معرض لهذا اللون." /> : null}
+                              </div>
+                            </div>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
+                  <div>
+                    <h3 className="font-black text-slate-950">الصور الإضافية الثابتة</h3>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">هذه الصور تظل ثابتة ولا تتغير عند اختيار لون مختلف ويمكنك التحكم في الجزء الظاهر من كل صورة.</p>
+                  </div>
+                  <div className="mt-4">
+                    <label className="mb-2 block text-sm font-black text-slate-900">الصور الإضافية {bannersCount ? `(${bannersCount}/6)` : ""}</label>
+                    <FileInput label="إضافة صور إضافية" multiple onChange={(event) => { addImages(event.target.files, "banners", 6); event.target.value = ""; }} />
+                    <div className="mt-4 space-y-4">
+                      {form.existingBanners.map((image) => (
+                        <ImageEditorCard
+                          key={image.localId}
+                          image={image}
+                          kind="banner"
+                          title="صورة إضافية حالية"
+                          onChange={(patch) => updateManagedImage("existingBanners", image.localId, patch)}
+                          onRemove={() => removeManagedImage("existingBanners", image.localId)}
+                        />
+                      ))}
+                      {form.banners.map((image) => (
+                        <ImageEditorCard
+                          key={image.localId}
+                          image={image}
+                          kind="banner"
+                          title="صورة إضافية جديدة"
+                          onChange={(patch) => updateManagedImage("banners", image.localId, patch)}
+                          onRemove={() => removeManagedImage("banners", image.localId)}
+                        />
+                      ))}
+                      {!bannersCount ? <EmptyImages text="لا توجد صور إضافية حتى الآن." /> : null}
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
                       <h3 className="font-black text-slate-950">عروض الكميات</h3>
-                      <p className="mt-1 text-xs leading-5 text-slate-500">مثل: قطعة، قطعتان بسعر مخفض، ثلاث قطع.</p>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">تبقى كما هي على المنتج وتظهر للعميل إن كانت مضافة.</p>
                     </div>
                     <button type="button" onClick={addOffer} className="inline-flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-black text-slate-700 shadow-sm">
                       <Plus size={15} /> عرض جديد
                     </button>
                   </div>
-
                   <div className="mt-4 space-y-3">
                     {form.offers.map((offer, index) => (
-                      <div key={index} className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-3 lg:grid-cols-[1.1fr_.45fr_.65fr_1fr_auto]">
-                        <input className="input-field" placeholder="اسم العرض" value={offer.label} onChange={(event) => updateOffer(index, "label", event.target.value)} />
-                        <input className="input-field" type="number" min="1" placeholder="الكمية" value={offer.quantity} onChange={(event) => updateOffer(index, "quantity", event.target.value)} />
-                        <input className="input-field" type="number" min="0" step="0.01" placeholder="السعر" value={offer.price} onChange={(event) => updateOffer(index, "price", event.target.value)} />
-                        <input className="input-field" placeholder="نص التوفير" value={offer.savingsText} onChange={(event) => updateOffer(index, "savingsText", event.target.value)} />
-                        <button type="button" onClick={() => removeOffer(index)} className="grid h-12 place-items-center rounded-xl bg-red-50 px-4 text-red-600" title="حذف العرض"><Trash2 size={18} /></button>
+                      <div key={index} className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-3 lg:grid-cols-[1.1fr_.5fr_.7fr_1fr_auto]">
+                        <Input label="اسم العرض" value={offer.label} onChange={(event) => updateOffer(index, "label", event.target.value)} placeholder="مثل عرض قطعتين" />
+                        <Input label="الكمية" type="number" min="1" step="1" value={offer.quantity} onChange={(event) => updateOffer(index, "quantity", event.target.value)} />
+                        <Input label="السعر" type="number" min="0" step="0.01" value={offer.price} onChange={(event) => updateOffer(index, "price", event.target.value)} />
+                        <Input label="نص التوفير" value={offer.savingsText} onChange={(event) => updateOffer(index, "savingsText", event.target.value)} placeholder="اختياري" />
+                        <button type="button" onClick={() => removeOffer(index)} className="self-end rounded-xl bg-red-50 px-3 py-3 text-xs font-black text-red-700">حذف</button>
                       </div>
                     ))}
-                  </div>
-                </section>
-
-                <section className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 sm:p-5">
-                  <div className="flex items-start gap-3">
-                    <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-slate-950 text-white"><Crop size={20} /></span>
-                    <div>
-                      <h3 className="font-black text-slate-950">إدارة الصور والتحكم في الجزء الظاهر</h3>
-                      <p className="mt-1 text-xs font-bold leading-6 text-slate-500">تظهر الصور كاملة بدون قص أو تشويه. غيّر الترتيب بالسحب أو بالأزرار، وحدد موضع الصورة بسهولة باستخدام الأسهم أو أشرطة التحكم.</p>
-                    </div>
-                  </div>
-
-                  <div className="mt-5 space-y-6">
-                    <MediaSectionHeader title="الصورة الرئيسية" subtitle="إجبارية — يمكنك رفع صورة جديدة بدل الحالية" count={mainPreview ? 1 : 0} max={1} />
-                    <FileField
-                      label={form.id ? "اختيار صورة رئيسية جديدة — اختياري" : "اختيار الصورة الرئيسية"}
-                      multiple={false}
-                      onChange={(event) => {
-                        selectMainImage(event.target.files?.[0]);
-                        event.target.value = "";
-                      }}
-                    />
-                    {mainPreview ? (
-                      <ImageEditorCard
-                        image={mainPreview}
-                        kind="main"
-                        badge={form.mainImage ? "صورة جديدة" : "الصورة الحالية"}
-                        onChange={(patch) => updateManagedImage(form.mainImage ? "mainImage" : "existingMainImage", mainPreview.localId, patch)}
-                        onRemove={form.mainImage ? () => removeManagedImage("mainImage", mainPreview.localId) : null}
-                      />
-                    ) : null}
-                    {form.mainImage && form.existingMainImage ? (
-                      <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">الصورة الجديدة ستحل محل الصورة الحالية بعد الضغط على حفظ التعديلات.</p>
-                    ) : null}
-
-                    <div className="border-t border-slate-200 pt-6">
-                      <MediaSectionHeader title="صور المعرض" subtitle="تظهر مع الصورة الرئيسية في سلايدر المنتج" count={galleryCount} max={8} />
-                      <FileField
-                        label="إضافة صور جديدة للمعرض"
-                        multiple
-                        onChange={(event) => {
-                          addImages(event.target.files, "gallery", 8);
-                          event.target.value = "";
-                        }}
-                      />
-                      {galleryCount ? (
-                        <SortableMediaList
-                          kind="gallery"
-                          images={galleryImages}
-                          existingIds={new Set(form.existingGallery.map((image) => image.localId))}
-                          onChange={(image, patch) =>
-                            updateManagedImage(
-                              form.existingGallery.some((item) => item.localId === image.localId)
-                                ? "existingGallery"
-                                : "gallery",
-                              image.localId,
-                              patch
-                            )
-                          }
-                          onRemove={(image) =>
-                            removeManagedImage(
-                              form.existingGallery.some((item) => item.localId === image.localId)
-                                ? "existingGallery"
-                                : "gallery",
-                              image.localId
-                            )
-                          }
-                          onMove={(id, direction) => moveMedia("gallery", id, direction)}
-                          onDrop={(draggedId, targetId) => dropMedia("gallery", draggedId, targetId)}
-                        />
-                      ) : <EmptyImages text="لا توجد صور إضافية حتى الآن." />}
-                    </div>
-
-                    <div className="border-t border-slate-200 pt-6">
-                      <MediaSectionHeader title="صور إضافية" subtitle="" count={bannersCount} max={6} />
-                      <FileField
-                        label="إضافة صور"
-                        multiple
-                        onChange={(event) => {
-                          addImages(event.target.files, "banners", 6);
-                          event.target.value = "";
-                        }}
-                      />
-                      {bannersCount ? (
-                        <SortableMediaList
-                          kind="banners"
-                          images={bannerImages}
-                          existingIds={new Set(form.existingBanners.map((image) => image.localId))}
-                          onChange={(image, patch) =>
-                            updateManagedImage(
-                              form.existingBanners.some((item) => item.localId === image.localId)
-                                ? "existingBanners"
-                                : "banners",
-                              image.localId,
-                              patch
-                            )
-                          }
-                          onRemove={(image) =>
-                            removeManagedImage(
-                              form.existingBanners.some((item) => item.localId === image.localId)
-                                ? "existingBanners"
-                                : "banners",
-                              image.localId
-                            )
-                          }
-                          onMove={(id, direction) => moveMedia("banners", id, direction)}
-                          onDrop={(draggedId, targetId) => dropMedia("banners", draggedId, targetId)}
-                        />
-                      ) : <EmptyImages text="لا توجد صور إضافية حتى الآن." />}
-                    </div>
                   </div>
                 </section>
 
@@ -769,7 +786,7 @@ export default function AdminDashboardPage() {
                 {status.success ? <p className="flex items-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 p-3 text-sm font-bold text-emerald-700"><CheckCircle2 size={18} />{status.success}</p> : null}
 
                 <button type="submit" disabled={status.saving} className="btn-primary w-full text-base">
-                  <Save size={19} /> {status.saving ? "جارٍ الحفظ ورفع الصور..." : form.id ? "حفظ التعديلات" : "إضافة ونشر المنتج"}
+                  <Save size={19} /> {status.saving ? "جارٍ الحفظ ورفع الصور" : form.id ? "حفظ التعديلات" : "إضافة ونشر المنتج"}
                 </button>
               </div>
             </form>
@@ -786,11 +803,11 @@ export default function AdminDashboardPage() {
               </div>
 
               <div className="max-h-[74vh] space-y-3 overflow-y-auto p-4">
-                {status.loading ? <p className="py-14 text-center text-sm font-black text-slate-500">جارٍ تحميل المنتجات...</p> : null}
+                {status.loading ? <p className="py-14 text-center text-sm font-black text-slate-500">جارٍ تحميل المنتجات</p> : null}
                 {!status.loading && !products.length ? (
                   <div className="py-14 text-center">
                     <PackagePlus size={38} className="mx-auto text-slate-300" />
-                    <p className="mt-3 text-sm font-black text-slate-500">أضف أول منتج من النموذج.</p>
+                    <p className="mt-3 text-sm font-black text-slate-500">أضف أول منتج من النموذج</p>
                   </div>
                 ) : null}
 
@@ -798,21 +815,16 @@ export default function AdminDashboardPage() {
                   <article key={product._id} className={`rounded-2xl border p-3 transition ${form.id === product._id ? "border-emerald-500 bg-emerald-50" : "border-slate-200 bg-white"}`}>
                     <div className="flex gap-3">
                       <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-xl bg-slate-100">
-                        <Image
-                          src={product.mainImage.url}
-                          alt={product.name}
-                          fill
-                          sizes="96px"
-                          className="object-contain p-1"
-                          style={{ objectPosition: `${product.mainImage.focusX ?? 50}% ${product.mainImage.focusY ?? 50}%` }}
-                        />
+                        <Image src={(product.colorVariants?.[0]?.mainImage || product.mainImage).url} alt={product.name} fill sizes="96px" className="object-cover" />
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
                             <h3 className="line-clamp-2 text-sm font-black leading-6 text-slate-950">{product.name}</h3>
                             <p className="mt-1 text-sm font-black text-emerald-700">{formatPrice(product.price, product.currency)}</p>
-                            <p className="mt-1 text-[10px] font-bold text-slate-400">{product.gallery?.length || 0} معرض · {product.banners?.length || 0} صور إضافية</p>
+                            <p className="mt-1 text-[10px] font-bold text-slate-400">
+                              {product.gallery?.length || 0} معرض · {product.banners?.length || 0} إضافية · {product.colorVariants?.length || 0} لون
+                            </p>
                           </div>
                           <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black ${product.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
                             {product.active ? "ظاهر" : "مخفي"}
@@ -825,12 +837,7 @@ export default function AdminDashboardPage() {
                     </div>
                     <div className="mt-2 grid grid-cols-2 gap-2">
                       <button type="button" onClick={() => startEdit(product)} className="inline-flex items-center justify-center gap-1 rounded-xl bg-slate-950 px-2 py-2.5 text-xs font-black text-white"><Pencil size={14} /> تعديل</button>
-                      <button
-                        type="button"
-                        onClick={() => toggleProductStatus(product)}
-                        className={`inline-flex items-center justify-center gap-1 rounded-xl px-2 py-2.5 text-xs font-black ${product.active ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}
-                        title={product.active ? "تعطيل المنتج وإخفاؤه" : "تفعيل المنتج وإظهاره"}
-                      >
+                      <button type="button" onClick={() => toggleProductStatus(product)} className={`inline-flex items-center justify-center gap-1 rounded-xl px-2 py-2.5 text-xs font-black ${product.active ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>
                         {product.active ? <PowerOff size={14} /> : <Power size={14} />}
                         {product.active ? "تعطيل" : "تفعيل"}
                       </button>
@@ -853,326 +860,219 @@ export default function AdminDashboardPage() {
   );
 }
 
-function SortableMediaList({
-  kind,
-  images,
-  existingIds,
-  onChange,
-  onRemove,
-  onMove,
-  onDrop
-}) {
-  const [draggedId, setDraggedId] = useState("");
-  const isGallery = kind === "gallery";
-
+function StatCard({ icon: Icon, label, value, className = "" }) {
   return (
-    <div className={`mt-4 grid gap-4 ${isGallery ? "md:grid-cols-2" : "md:grid-cols-2 xl:grid-cols-3"}`}>
-      {images.map((image, index) => (
-        <ImageEditorCard
-          key={image.localId}
-          image={image}
-          kind={isGallery ? "gallery" : "banner"}
-          badge={existingIds.has(image.localId) ? "صورة حالية" : "صورة جديدة"}
-          onChange={(patch) => onChange(image, patch)}
-          onRemove={() => onRemove(image)}
-          canMoveUp={index > 0}
-          canMoveDown={index < images.length - 1}
-          onMoveUp={() => onMove(image.localId, -1)}
-          onMoveDown={() => onMove(image.localId, 1)}
-          draggable
-          dragging={draggedId === image.localId}
-          onDragStart={(event) => {
-            setDraggedId(image.localId);
-            event.dataTransfer.effectAllowed = "move";
-            event.dataTransfer.setData("text/plain", image.localId);
-          }}
-          onDragOver={(event) => {
-            event.preventDefault();
-            event.dataTransfer.dropEffect = "move";
-          }}
-          onDrop={(event) => {
-            event.preventDefault();
-            const sourceId = event.dataTransfer.getData("text/plain") || draggedId;
-            onDrop(sourceId, image.localId);
-            setDraggedId("");
-          }}
-          onDragEnd={() => setDraggedId("")}
-        />
-      ))}
-    </div>
-  );
-}
-
-function ImageEditorCard({
-  image,
-  kind,
-  badge,
-  onChange,
-  onRemove,
-  canMoveUp = false,
-  canMoveDown = false,
-  onMoveUp,
-  onMoveDown,
-  draggable = false,
-  dragging = false,
-  onDragStart,
-  onDragOver,
-  onDrop,
-  onDragEnd
-}) {
-  const naturalRatio =
-    Number(image.width) > 0 && Number(image.height) > 0
-      ? `${image.width} / ${image.height}`
-      : kind === "banner"
-        ? "9 / 16"
-        : "1 / 1";
-
-  return (
-    <article
-      draggable={draggable}
-      onDragStart={onDragStart}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
-      onDragEnd={onDragEnd}
-      className={`overflow-hidden rounded-2xl border bg-white shadow-sm transition ${
-        dragging ? "scale-[.98] border-emerald-500 opacity-55" : "border-slate-200"
-      } ${draggable ? "cursor-grab active:cursor-grabbing" : ""}`}
-    >
-      <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-3 py-2.5">
-        <span className="inline-flex items-center gap-2 text-[11px] font-black text-slate-600">
-          {draggable ? <GripVertical size={16} className="text-emerald-600" /> : <ImageIcon size={15} />}
-          {draggable ? "اسحب لتغيير الترتيب" : badge}
-        </span>
-        <span className="rounded-full bg-slate-950 px-2.5 py-1 text-[10px] font-black text-white">
-          {badge}
-        </span>
-      </div>
-
-      <div
-        className={`relative mx-auto flex w-full items-center justify-center overflow-hidden bg-white ${
-          kind === "main" ? "max-w-[520px]" : kind === "banner" ? "max-w-[430px]" : ""
-        }`}
-        style={{ aspectRatio: naturalRatio }}
-      >
-        <img
-          src={image.url}
-          alt="معاينة الصورة"
-          className="h-full w-full object-contain"
-          style={{ objectPosition: `${image.focusX ?? 50}% ${image.focusY ?? 50}%` }}
-          draggable={false}
-        />
-      </div>
-
-      <div className="space-y-3 p-3">
-        <p className="rounded-xl bg-emerald-50 px-3 py-2 text-center text-[11px] font-black leading-5 text-emerald-700">
-          تظهر الصورة كاملة بأبعادها الأصلية بدون قص أو تشويه.
-        </p>
-
-        <ImagePositionControls image={image} onChange={onChange} />
-
-        {draggable ? (
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={onMoveUp}
-              disabled={!canMoveUp}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 disabled:cursor-not-allowed disabled:opacity-35"
-            >
-              <ArrowUp size={15} /> للأعلى
-            </button>
-            <button
-              type="button"
-              onClick={onMoveDown}
-              disabled={!canMoveDown}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 disabled:cursor-not-allowed disabled:opacity-35"
-            >
-              <ArrowDown size={15} /> للأسفل
-            </button>
-          </div>
-        ) : null}
-
-        {onRemove ? (
-          <button
-            type="button"
-            onClick={onRemove}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-red-50 px-3 py-2.5 text-xs font-black text-red-700"
-          >
-            <Trash2 size={15} /> حذف هذه الصورة فقط
-          </button>
-        ) : null}
-      </div>
-    </article>
-  );
-}
-
-function ImagePositionControls({ image, onChange }) {
-  const focusX = Math.max(0, Math.min(100, Number(image.focusX ?? 50)));
-  const focusY = Math.max(0, Math.min(100, Number(image.focusY ?? 50)));
-
-  function move(xDelta, yDelta) {
-    onChange({
-      focusX: Math.max(0, Math.min(100, focusX + xDelta)),
-      focusY: Math.max(0, Math.min(100, focusY + yDelta))
-    });
-  }
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <span className="inline-flex items-center gap-2 text-xs font-black text-slate-800">
-          <Move size={15} className="text-emerald-600" /> موضع الصورة داخل البطاقات
-        </span>
-        <button
-          type="button"
-          onClick={() => onChange({ focusX: 50, focusY: 50 })}
-          className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-black text-slate-600 shadow-sm"
-        >
-          <RotateCcw size={13} /> توسيط
-        </button>
-      </div>
-
-      <div className="mt-3 grid grid-cols-[1fr_112px] items-center gap-3">
-        <div className="space-y-3">
-          <label className="block">
-            <span className="mb-1.5 flex items-center justify-between text-[10px] font-black text-slate-500">
-              <span>أفقي</span><span>{Math.round(focusX)}%</span>
-            </span>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              step="1"
-              value={focusX}
-              onChange={(event) => onChange({ focusX: Number(event.target.value) })}
-              className="w-full accent-emerald-600"
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1.5 flex items-center justify-between text-[10px] font-black text-slate-500">
-              <span>رأسي</span><span>{Math.round(focusY)}%</span>
-            </span>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              step="1"
-              value={focusY}
-              onChange={(event) => onChange({ focusY: Number(event.target.value) })}
-              className="w-full accent-emerald-600"
-            />
-          </label>
-        </div>
-
-        <div className="space-y-2">
-          <div className="relative aspect-square overflow-hidden rounded-xl border border-slate-200 bg-white">
-            <img
-              src={image.url}
-              alt="معاينة موضع الصورة داخل البطاقة"
-              className="h-full w-full object-contain p-1"
-              style={{ objectPosition: `${focusX}% ${focusY}%` }}
-              draggable={false}
-            />
-          </div>
-          <div className="grid grid-cols-3 gap-1.5">
-            <span />
-            <PositionButton label="أعلى" onClick={() => move(0, -5)}><ArrowUp size={15} /></PositionButton>
-            <span />
-            <PositionButton label="يمين" onClick={() => move(5, 0)}><ArrowRight size={15} /></PositionButton>
-            <button
-              type="button"
-              onClick={() => onChange({ focusX: 50, focusY: 50 })}
-              className="grid h-9 place-items-center rounded-lg bg-emerald-600 text-[9px] font-black text-white"
-              title="توسيط"
-            >
-              50
-            </button>
-            <PositionButton label="يسار" onClick={() => move(-5, 0)}><ArrowLeft size={15} /></PositionButton>
-            <span />
-            <PositionButton label="أسفل" onClick={() => move(0, 5)}><ArrowDown size={15} /></PositionButton>
-            <span />
-          </div>
-        </div>
-      </div>
-
-      <p className="mt-2 text-[10px] font-bold leading-5 text-slate-500">
-        استخدم الأسهم للتحريك 5% في كل ضغطة، أو استخدم الشريط لتحديد الموضع بدقة.
-      </p>
-    </div>
-  );
-}
-
-function PositionButton({ label, onClick, children }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="grid h-9 place-items-center rounded-lg bg-white text-slate-700 shadow-sm transition hover:bg-emerald-50 hover:text-emerald-700"
-      title={label}
-      aria-label={label}
-    >
-      {children}
-    </button>
-  );
-}
-
-function MediaSectionHeader({ title, subtitle, count, max }) {
-  return (
-    <div className="mb-3 flex items-start justify-between gap-4">
-      <div>
-        <h4 className="flex items-center gap-2 text-sm font-black text-slate-950"><ImageIcon size={17} className="text-emerald-600" /> {title}</h4>
-        {subtitle ? <p className="mt-1 text-xs font-bold leading-5 text-slate-500">{subtitle}</p> : null}
-      </div>
-      <span className="shrink-0 rounded-full bg-white px-3 py-1.5 text-[11px] font-black text-slate-600 shadow-sm">{count}/{max}</span>
-    </div>
-  );
-}
-
-function EmptyImages({ text }) {
-  return (
-    <div className="mt-3 rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-center">
-      <ImagePlus size={25} className="mx-auto text-slate-300" />
-      <p className="mt-2 text-xs font-bold text-slate-500">{text}</p>
-    </div>
-  );
-}
-
-function StatCard({ icon: Icon, label, value, className }) {
-  return (
-    <article className={`rounded-2xl border border-slate-200/70 p-5 shadow-sm ${className}`}>
-      <div className="flex items-center justify-between gap-3">
+    <article className={`rounded-3xl p-5 shadow-sm ${className}`}>
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <p className="text-xs font-bold opacity-70">{label}</p>
+          <p className="text-xs font-black opacity-80">{label}</p>
           <strong className="mt-2 block text-3xl font-black">{value}</strong>
         </div>
-        <span className="grid h-12 w-12 place-items-center rounded-2xl bg-black/10"><Icon size={23} /></span>
+        <span className="grid h-12 w-12 place-items-center rounded-2xl bg-white/20 backdrop-blur">
+          <Icon size={24} />
+        </span>
       </div>
     </article>
   );
 }
 
-function Input({ label, ...props }) {
+function Input({ label, className = "", ...props }) {
   return (
-    <label className="block space-y-2">
-      <span className="text-sm font-black text-slate-800">{label}</span>
+    <label className={`block space-y-2 ${className}`}>
+      <span className="text-sm font-black text-slate-900">{label}</span>
       <input className="input-field" {...props} />
     </label>
   );
 }
 
-function Textarea({ label, ...props }) {
+function Textarea({ label, className = "", ...props }) {
   return (
-    <label className="block space-y-2">
-      <span className="text-sm font-black text-slate-800">{label}</span>
-      <textarea className="input-field resize-y" {...props} />
+    <label className={`block space-y-2 ${className}`}>
+      <span className="text-sm font-black text-slate-900">{label}</span>
+      <textarea className="input-field min-h-[120px] resize-y" {...props} />
     </label>
   );
 }
 
-function FileField({ label, multiple, onChange }) {
+function FileInput({ label, multiple = false, onChange }) {
   return (
-    <label className="block cursor-pointer rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-emerald-400 hover:bg-emerald-50/40">
-      <span className="flex items-center gap-2 text-sm font-black text-slate-800"><Upload size={18} className="text-emerald-600" /> {label}</span>
-      <input type="file" multiple={multiple} accept="image/jpeg,image/png,image/webp,image/avif" onChange={onChange} className="mt-3 block w-full text-xs text-slate-500 file:ml-3 file:rounded-lg file:border-0 file:bg-slate-950 file:px-3 file:py-2 file:font-black file:text-white" />
+    <label className="flex min-h-[52px] cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm font-black text-slate-700 transition hover:border-emerald-400 hover:bg-emerald-50">
+      <ImagePlus size={18} /> {label}
+      <input type="file" accept="image/*" multiple={multiple} className="hidden" onChange={onChange} />
     </label>
   );
+}
+
+function ImageCard({ image, title, onRemove }) {
+  return (
+    <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="relative aspect-square w-full bg-slate-100">
+        <img src={image.url} alt={title} className="h-full w-full object-contain" />
+      </div>
+      <div className="flex items-center justify-between gap-3 p-3">
+        <p className="line-clamp-1 text-xs font-black text-slate-700">{title}</p>
+        <button type="button" onClick={onRemove} className="rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700">حذف</button>
+      </div>
+    </div>
+  );
+}
+
+function ImagesGrid({ images = [], onRemove, banner = false }) {
+  if (!images.length) return <EmptyImages text="لا توجد صور حتى الآن." />;
+  return (
+    <div className={`mt-3 grid gap-3 ${banner ? "grid-cols-1" : "grid-cols-2 sm:grid-cols-3"}`}>
+      {images.map((image, index) => (
+        <div key={image.localId || `${image.url}-${index}`} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className={`relative w-full bg-slate-100 ${banner ? "aspect-[9/16]" : "aspect-square"}`}>
+            <img src={image.url} alt="preview" className="h-full w-full object-contain" />
+          </div>
+          <button type="button" onClick={() => onRemove(image)} className="w-full border-t border-slate-100 px-3 py-2 text-xs font-black text-red-700">
+            حذف الصورة
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ImageEditorCard({ image, kind = "gallery", title, onChange, onRemove }) {
+  const aspectClass = kind === "banner"
+    ? "mx-auto aspect-[9/16] max-w-[390px]"
+    : kind === "main"
+      ? "aspect-square"
+      : "aspect-square";
+
+  function clampFocus(value) {
+    return Math.min(100, Math.max(0, Math.round(Number(value) || 0)));
+  }
+
+  function setFocusFromPointer(event) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const focusX = clampFocus(((event.clientX - rect.left) / rect.width) * 100);
+    const focusY = clampFocus(((event.clientY - rect.top) / rect.height) * 100);
+    onChange({ focusX, focusY });
+  }
+
+  function nudge(x, y) {
+    onChange({
+      focusX: clampFocus(Number(image.focusX ?? 50) + x),
+      focusY: clampFocus(Number(image.focusY ?? 50) + y)
+    });
+  }
+
+  return (
+    <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-3">
+        <div>
+          <p className="text-sm font-black text-slate-900">{title}</p>
+          <p className="mt-1 text-[11px] font-bold text-slate-500">اضغط على الجزء المهم من الصورة أو استخدم الأسهم وشريطي الحركة</p>
+        </div>
+        <button type="button" onClick={onRemove} className="inline-flex items-center gap-1 rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700">
+          <Trash2 size={14} /> حذف الصورة
+        </button>
+      </div>
+
+      <button
+        type="button"
+        onClick={setFocusFromPointer}
+        className={`relative block w-full overflow-hidden bg-slate-100 ${aspectClass}`}
+        title="اضغط لتحديد الجزء المهم من الصورة"
+      >
+        <img
+          src={image.url}
+          alt={title}
+          className="h-full w-full"
+          style={{
+            objectFit: image.fit === "contain" ? "contain" : "cover",
+            objectPosition: `${image.focusX ?? 50}% ${image.focusY ?? 50}%`
+          }}
+        />
+        <span
+          className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-emerald-500 shadow-[0_0_0_3px_rgba(15,23,42,.45)]"
+          style={{ left: `${image.focusX ?? 50}%`, top: `${image.focusY ?? 50}%` }}
+        />
+      </button>
+
+      <div className="space-y-4 p-4">
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => onChange({ fit: "cover" })}
+            className={`rounded-xl border px-3 py-2 text-xs font-black transition ${image.fit !== "contain" ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600"}`}
+          >
+            ملء الإطار
+          </button>
+          <button
+            type="button"
+            onClick={() => onChange({ fit: "contain" })}
+            className={`rounded-xl border px-3 py-2 text-xs font-black transition ${image.fit === "contain" ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600"}`}
+          >
+            عرض الصورة كاملة
+          </button>
+        </div>
+
+        <div className="grid grid-cols-[44px_44px_44px] justify-center gap-2" dir="ltr">
+          <span />
+          <button type="button" onClick={() => nudge(0, -5)} className="grid h-11 w-11 place-items-center rounded-xl bg-slate-100 text-slate-700" title="تحريك لأعلى">
+            <ChevronUp size={20} />
+          </button>
+          <span />
+          <button type="button" onClick={() => nudge(-5, 0)} className="grid h-11 w-11 place-items-center rounded-xl bg-slate-100 text-slate-700" title="تحريك لليسار">
+            <ChevronLeft size={20} />
+          </button>
+          <span className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><Move size={18} /></span>
+          <button type="button" onClick={() => nudge(5, 0)} className="grid h-11 w-11 place-items-center rounded-xl bg-slate-100 text-slate-700" title="تحريك لليمين">
+            <ChevronRight size={20} />
+          </button>
+          <span />
+          <button type="button" onClick={() => nudge(0, 5)} className="grid h-11 w-11 place-items-center rounded-xl bg-slate-100 text-slate-700" title="تحريك لأسفل">
+            <ChevronDown size={20} />
+          </button>
+          <span />
+        </div>
+
+        <label className="block space-y-2">
+          <span className="flex items-center justify-between text-xs font-black text-slate-700">
+            <span>الحركة الأفقية</span>
+            <span>{Math.round(Number(image.focusX ?? 50))}%</span>
+          </span>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={image.focusX ?? 50}
+            onChange={(event) => onChange({ focusX: Number(event.target.value) })}
+            className="w-full accent-emerald-600"
+          />
+        </label>
+
+        <label className="block space-y-2">
+          <span className="flex items-center justify-between text-xs font-black text-slate-700">
+            <span>الحركة الرأسية</span>
+            <span>{Math.round(Number(image.focusY ?? 50))}%</span>
+          </span>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={image.focusY ?? 50}
+            onChange={(event) => onChange({ focusY: Number(event.target.value) })}
+            className="w-full accent-emerald-600"
+          />
+        </label>
+
+        <button
+          type="button"
+          onClick={() => onChange({ focusX: 50, focusY: 50 })}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 py-2.5 text-xs font-black text-slate-700"
+        >
+          <RotateCcw size={15} /> إعادة الصورة إلى المنتصف
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function EmptyImages({ text }) {
+  return <p className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-xs font-bold text-slate-500">{text}</p>;
 }

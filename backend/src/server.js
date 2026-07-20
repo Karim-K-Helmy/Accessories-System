@@ -10,6 +10,7 @@ import productRoutes from "./routes/productRoutes.js";
 import settingsRoutes from "./routes/settingsRoutes.js";
 import { errorHandler, notFound } from "./middleware/errorHandler.js";
 import { ensureInitialAdmin } from "./services/ensureInitialAdmin.js";
+import { processPendingCloudinaryDeletes } from "./services/cloudinaryCleanupService.js";
 
 const app = express();
 const port = Number(process.env.PORT || 5000);
@@ -61,6 +62,14 @@ app.use(errorHandler);
 async function startServer() {
   await connectDatabase();
   await ensureInitialAdmin();
+
+  processPendingCloudinaryDeletes().then((result) => {
+    if (result.processed) {
+      console.log(`Cloudinary cleanup processed ${result.processed} tasks, deleted ${result.deleted}.`);
+    }
+  }).catch((error) => {
+    console.error("Cloudinary cleanup retry failed:", error);
+  });
 
   app.listen(port, "0.0.0.0", () => {
     console.log(`API running on http://localhost:${port}`);
