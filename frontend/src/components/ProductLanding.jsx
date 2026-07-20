@@ -6,8 +6,10 @@ import {
   BadgeInfo,
   Check,
   ChevronLeft,
+  ExternalLink,
   PackageCheck,
   Palette,
+  PlayCircle,
   ShieldCheck,
   Sparkles,
   Truck
@@ -66,6 +68,8 @@ export default function ProductLanding({ product, relatedProducts = [] }) {
               <div className="space-y-6 [direction:rtl]">
                 <ProductGallery product={displayProduct} desktop />
                 <ProductDescription product={displayProduct} desktop />
+                {displayProduct.videoUrl ? <ProductVideo product={displayProduct} desktop /> : null}
+                {relatedProducts.length ? <RelatedProducts products={relatedProducts} desktop /> : null}
               </div>
 
               <aside className="[direction:rtl]">
@@ -79,16 +83,6 @@ export default function ProductLanding({ product, relatedProducts = [] }) {
 
             <ProductBanners banners={product.banners} desktop />
 
-            {displayProduct.videoUrl || relatedProducts.length ? (
-              <div className={`mt-10 grid gap-8 ${displayProduct.videoUrl && relatedProducts.length ? "grid-cols-[minmax(0,1fr)_360px]" : "grid-cols-1"}`}>
-                {displayProduct.videoUrl ? <ProductVideo product={displayProduct} desktop /> : null}
-                {relatedProducts.length ? (
-                  <div className={displayProduct.videoUrl ? "" : "mx-auto w-full max-w-xl"}>
-                    <RelatedProducts products={relatedProducts} desktop />
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
           </section>
         </div>
       </main>
@@ -102,7 +96,12 @@ function ProductSummary({ product, variants = [], selectedVariantIndex = 0, onSe
     : 0;
 
   const stock = Number(product.selectedVariant?.stock ?? -1);
-  const stockText = stock < 0 ? "" : stock === 0 ? "نفد المخزون" : `المخزون ${stock}`;
+  const selectedColorName = product.selectedVariant?.name || "";
+  const availabilityText = stock < 0
+    ? ""
+    : stock === 0
+      ? `${selectedColorName} غير متوفر`
+      : `${selectedColorName} متوفر`;
 
   return (
     <section className={desktop ? "rounded-[28px] border border-slate-200 bg-white p-7 shadow-[0_18px_55px_rgba(15,23,42,0.08)]" : "store-card p-5 sm:p-6"}>
@@ -139,9 +138,10 @@ function ProductSummary({ product, variants = [], selectedVariantIndex = 0, onSe
             <span className="inline-block h-3.5 w-3.5 rounded-full border border-white shadow" style={{ backgroundColor: product.selectedVariant.colorHex }} />
             اللون المختار {product.selectedVariant.name}
           </span>
-          {stockText ? (
+          {availabilityText ? (
             <span className={`inline-flex items-center rounded-full px-3 py-2 text-xs font-black ${stock === 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
-              {stockText}
+              {availabilityText}
+              {stock > 0 ? ` · المخزون ${stock}` : ""}
             </span>
           ) : null}
         </div>
@@ -193,7 +193,10 @@ function ColorSelector({ variants, selectedVariantIndex, onSelectVariant, deskto
                 <div className="min-w-0">
                   <p className="text-sm font-black text-slate-900">{variant.name}</p>
                   <p className="mt-1 text-[11px] font-bold text-slate-500">
-                    {outOfStock ? "غير متوفر" : formatPrice(variant.price, "")}
+                    {formatPrice(variant.price, "")}
+                  </p>
+                  <p className={`mt-1 text-[11px] font-black ${outOfStock ? "text-amber-700" : "text-emerald-700"}`}>
+                    {outOfStock ? "غير متوفر" : "متوفر"}
                   </p>
                 </div>
               </div>
@@ -251,13 +254,96 @@ function ProductDescription({ product, desktop = false }) {
   );
 }
 
+function parseVideoSource(value) {
+  const rawUrl = String(value || "").trim();
+  if (!rawUrl) return null;
+
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
+
+    if (host === "youtu.be") {
+      const videoId = parsed.pathname.split("/").filter(Boolean)[0];
+      if (videoId) return { type: "youtube", src: `https://www.youtube-nocookie.com/embed/${videoId}`, original: rawUrl };
+    }
+
+    if (host.endsWith("youtube.com")) {
+      const pathParts = parsed.pathname.split("/").filter(Boolean);
+      const videoId = parsed.searchParams.get("v")
+        || (pathParts[0] === "embed" ? pathParts[1] : "")
+        || (pathParts[0] === "shorts" ? pathParts[1] : "");
+      if (videoId) return { type: "youtube", src: `https://www.youtube-nocookie.com/embed/${videoId}`, original: rawUrl };
+    }
+
+    if (host === "drive.google.com" || host.endsWith(".drive.google.com")) {
+      const fileMatch = parsed.pathname.match(/\/file\/d\/([^/]+)/);
+      const fileId = fileMatch?.[1] || parsed.searchParams.get("id");
+      if (fileId) return { type: "drive", src: `https://drive.google.com/file/d/${fileId}/preview`, original: rawUrl };
+    }
+
+    if (/\.(mp4|webm|ogg|m4v|mov)(?:$|[?#])/i.test(rawUrl)
+      || (host === "res.cloudinary.com" && parsed.pathname.includes("/video/upload/"))) {
+      return { type: "direct", src: rawUrl, original: rawUrl };
+    }
+
+    return { type: "unknown", src: rawUrl, original: rawUrl };
+  } catch {
+    return { type: "unknown", src: rawUrl, original: rawUrl };
+  }
+}
+
 function ProductVideo({ product, desktop = false }) {
-  if (!product.videoUrl) return null;
+  const source = useMemo(() => parseVideoSource(product.videoUrl), [product.videoUrl]);
+  const [videoFailed, setVideoFailed] = useState(false);
+
+  if (!source) return null;
+
+  const sectionClass = desktop
+    ? "overflow-hidden rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm"
+    : "store-card overflow-hidden p-3";
 
   return (
-    <section className={desktop ? "overflow-hidden rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm" : "store-card overflow-hidden p-3"}>
+    <section className={sectionClass}>
       {desktop ? <h2 className="mb-4 px-2 text-xl font-black text-slate-950">شاهد المنتج عن قرب</h2> : null}
-      <video controls preload="metadata" className="max-h-[720px] w-full rounded-2xl bg-black" src={product.videoUrl} />
+
+      {source.type === "youtube" || source.type === "drive" ? (
+        <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-black">
+          <iframe
+            src={source.src}
+            title={`فيديو ${product.name}`}
+            className="absolute inset-0 h-full w-full border-0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowFullScreen
+            loading="lazy"
+            referrerPolicy="strict-origin-when-cross-origin"
+          />
+        </div>
+      ) : source.type === "direct" && !videoFailed ? (
+        <video
+          controls
+          playsInline
+          preload="metadata"
+          className="max-h-[720px] w-full rounded-2xl bg-black"
+          src={source.src}
+          onError={() => setVideoFailed(true)}
+        >
+          متصفحك لا يدعم تشغيل الفيديو
+        </video>
+      ) : (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-center">
+          <PlayCircle size={38} className="mx-auto text-amber-700" />
+          <p className="mt-3 text-sm font-black text-amber-900">تعذر تشغيل الفيديو داخل الصفحة</p>
+          <p className="mt-1 text-xs font-bold leading-6 text-amber-800">تأكد أن رابط Google Drive متاح لأي شخص لديه الرابط أو استخدم رابط YouTube أو MP4 مباشر</p>
+          <a
+            href={source.original}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-xs font-black text-white"
+          >
+            <ExternalLink size={15} /> فتح الفيديو
+          </a>
+        </div>
+      )}
     </section>
   );
 }
