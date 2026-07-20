@@ -1,0 +1,36 @@
+# Dependencies
+backend/node_modules/
+frontend/node_modules/
+
+# Environment variables
+backend/.env
+backend/.env.*
+!backend/.env.example
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+!frontend/.env.example
+
+# Next.js
+frontend/.next/
+frontend/out/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test / coverage
+coverage/
+
+# OS and editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp

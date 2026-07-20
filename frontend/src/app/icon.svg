@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="متجر إكسسوارات الهاتف">
+  <defs>
+    <linearGradient id="bg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0f172a"/>
+      <stop offset="1" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="18" y1="14" x2="48" y2="52" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#34d399"/>
+      <stop offset="1" stop-color="#16a34a"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#bg)"/>
+  <path d="M18 23.5h28l-2 25.5a5 5 0 0 1-5 4.6H25a5 5 0 0 1-5-4.6L18 23.5Z" fill="url(#accent)"/>
+  <path d="M25 24v-3.5a7 7 0 0 1 14 0V24" fill="none" stroke="#ecfdf5" stroke-width="3.2" stroke-linecap="round"/>
+  <rect x="27" y="29" width="10" height="18" rx="2.8" fill="#ecfdf5"/>
+  <rect x="29.2" y="31.4" width="5.6" height="11.8" rx="1.4" fill="#0f172a"/>
+  <circle cx="32" cy="45" r="1" fill="#0f172a"/>
+</svg>
