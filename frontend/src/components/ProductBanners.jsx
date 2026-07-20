@@ -12,7 +12,7 @@ export default function ProductBanners({ banners = [], desktop = false }) {
 
   if (desktop) {
     return (
-      <section className="mt-8 rounded-[30px] border border-slate-200 bg-white p-5 shadow-[0_18px_55px_rgba(15,23,42,0.07)]">
+      <section className="rounded-[30px] border border-slate-200 bg-white p-5 shadow-[0_18px_55px_rgba(15,23,42,0.07)]">
         <div className="grid items-start gap-5 md:grid-cols-2 xl:grid-cols-3">
           {banners.map((banner, index) => {
             const size = dimensions(banner);
@@ -28,6 +28,7 @@ export default function ProductBanners({ banners = [], desktop = false }) {
                   height={size.height}
                   sizes="(min-width: 1280px) 360px, (min-width: 768px) 46vw, 100vw"
                   className="h-auto w-full object-contain"
+                  style={{ objectPosition: `${banner.focusX ?? 50}% ${banner.focusY ?? 50}%` }}
                 />
               </article>
             );
@@ -53,6 +54,7 @@ export default function ProductBanners({ banners = [], desktop = false }) {
               height={size.height}
               sizes="(max-width: 640px) calc(100vw - 24px), 540px"
               className="h-auto w-full object-contain"
+              style={{ objectPosition: `${banner.focusX ?? 50}% ${banner.focusY ?? 50}%` }}
               priority={index === 0}
             />
           </article>

@@ -14,6 +14,7 @@ import ProductGallery from "./ProductGallery";
 import ProductBanners from "./ProductBanners";
 import WhatsAppOrderForm from "./WhatsAppOrderForm";
 import { formatPrice } from "@/lib/api";
+import { getVideoSource } from "@/lib/video";
 
 export default function ProductLanding({ product, relatedProducts = [] }) {
   return (
@@ -40,29 +41,19 @@ export default function ProductLanding({ product, relatedProducts = [] }) {
             <div className="space-y-6 [direction:rtl]">
               <ProductGallery product={product} desktop />
               <ProductDescription product={product} desktop />
+              <ProductVideo product={product} desktop />
+              <ProductBanners banners={product.banners} desktop />
             </div>
 
-            <aside className="[direction:rtl]">
+            <aside className="space-y-5 [direction:rtl]">
               <div className="sticky top-[104px] space-y-5">
                 <ProductSummary product={product} desktop />
                 <TrustGrid desktop />
                 <WhatsAppOrderForm product={product} desktop />
               </div>
+              {relatedProducts.length ? <RelatedProducts products={relatedProducts} desktop /> : null}
             </aside>
           </div>
-
-          <ProductBanners banners={product.banners} desktop />
-
-          {product.videoUrl || relatedProducts.length ? (
-            <div className={`mt-10 grid gap-8 ${product.videoUrl && relatedProducts.length ? "grid-cols-[minmax(0,1fr)_360px]" : "grid-cols-1"}`}>
-              {product.videoUrl ? <ProductVideo product={product} desktop /> : null}
-              {relatedProducts.length ? (
-                <div className={product.videoUrl ? "" : "mx-auto w-full max-w-xl"}>
-                  <RelatedProducts products={relatedProducts} desktop />
-                </div>
-              ) : null}
-            </div>
-          ) : null}
         </section>
       </div>
 
@@ -168,12 +159,43 @@ function ProductDescription({ product, desktop = false }) {
 }
 
 function ProductVideo({ product, desktop = false }) {
-  if (!product.videoUrl) return null;
+  const source = getVideoSource(product.videoUrl);
+  if (!source) return null;
 
   return (
     <section className={desktop ? "overflow-hidden rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm" : "store-card overflow-hidden p-3"}>
       {desktop ? <h2 className="mb-4 px-2 text-xl font-black text-slate-950">شاهد المنتج عن قرب</h2> : null}
-      <video controls preload="metadata" className="max-h-[720px] w-full rounded-2xl bg-black" src={product.videoUrl} />
+
+      {source.type === "video" ? (
+        <video
+          controls
+          preload="metadata"
+          playsInline
+          className="max-h-[720px] w-full rounded-2xl bg-black"
+          src={source.src}
+        />
+      ) : source.type === "embed" ? (
+        <div className="relative aspect-video overflow-hidden rounded-2xl bg-black">
+          <iframe
+            src={source.src}
+            title={`فيديو ${product.name}`}
+            className="absolute inset-0 h-full w-full border-0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowFullScreen
+            loading="lazy"
+            referrerPolicy="strict-origin-when-cross-origin"
+          />
+        </div>
+      ) : (
+        <a
+          href={source.src}
+          target="_blank"
+          rel="noreferrer"
+          className="flex min-h-28 items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 text-center text-sm font-black text-emerald-700"
+        >
+          فتح فيديو المنتج
+        </a>
+      )}
     </section>
   );
 }
@@ -182,7 +204,7 @@ function RelatedProducts({ products = [], desktop = false }) {
   if (!products.length) return null;
 
   return (
-    <section className={desktop ? "sticky top-[104px] rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm" : "store-card p-5"}>
+    <section className={desktop ? "rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm" : "store-card p-5"}>
       <p className="text-xs font-black text-emerald-700">قد يعجبك أيضًا</p>
       <h2 className={`mt-1 font-black text-slate-950 ${desktop ? "text-xl" : "text-lg"}`}>منتجات أخرى</h2>
       <div className="mt-4 divide-y divide-slate-100">

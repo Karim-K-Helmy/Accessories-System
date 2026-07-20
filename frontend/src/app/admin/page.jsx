@@ -6,6 +6,8 @@ import Image from "next/image";
 import Link from "next/link";
 import {
   ArrowDown,
+  ArrowLeft,
+  ArrowRight,
   ArrowUp,
   Box,
   CheckCircle2,
@@ -26,6 +28,7 @@ import {
   Power,
   PowerOff,
   RefreshCw,
+  RotateCcw,
   Save,
   Settings as SettingsIcon,
   Trash2,
@@ -605,7 +608,18 @@ export default function AdminDashboardPage() {
                     <Textarea label="المميزات — ميزة في كل سطر" name="featuresText" value={form.featuresText} onChange={updateField} rows={5} placeholder={"مقاوم للصدمات\nخامة عالية الجودة\nمتوفر بأكثر من لون"} />
                   </div>
                   <div className="sm:col-span-2">
-                    <Input label="رابط فيديو مباشر — اختياري" name="videoUrl" value={form.videoUrl} onChange={updateField} placeholder="https://.../video.mp4" />
+                    <Input
+                      label="رابط فيديو المنتج — اختياري"
+                      name="videoUrl"
+                      value={form.videoUrl}
+                      onChange={updateField}
+                      placeholder="رابط YouTube أو Google Drive أو رابط فيديو مباشر"
+                      dir="ltr"
+                      inputMode="url"
+                    />
+                    <p className="mt-2 text-[11px] font-bold leading-5 text-slate-500">
+                      يدعم روابط YouTube، وروابط ملفات الفيديو على Google Drive، وروابط MP4 المباشرة.
+                    </p>
                   </div>
                 </div>
 
@@ -638,7 +652,7 @@ export default function AdminDashboardPage() {
                     <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-slate-950 text-white"><Crop size={20} /></span>
                     <div>
                       <h3 className="font-black text-slate-950">إدارة الصور والتحكم في الجزء الظاهر</h3>
-                      <p className="mt-1 text-xs font-bold leading-6 text-slate-500">تظهر الصور كاملة بدون قص أو تشويه. اسحب الصورة وأفلتها لتغيير ترتيبها، ويمكنك حذف أي صورة منفردة.</p>
+                      <p className="mt-1 text-xs font-bold leading-6 text-slate-500">تظهر الصور كاملة بدون قص أو تشويه. غيّر الترتيب بالسحب أو بالأزرار، وحدد موضع الصورة بسهولة باستخدام الأسهم أو أشرطة التحكم.</p>
                     </div>
                   </div>
 
@@ -944,6 +958,7 @@ function ImageEditorCard({
           src={image.url}
           alt="معاينة الصورة"
           className="h-full w-full object-contain"
+          style={{ objectPosition: `${image.focusX ?? 50}% ${image.focusY ?? 50}%` }}
           draggable={false}
         />
       </div>
@@ -952,6 +967,8 @@ function ImageEditorCard({
         <p className="rounded-xl bg-emerald-50 px-3 py-2 text-center text-[11px] font-black leading-5 text-emerald-700">
           تظهر الصورة كاملة بأبعادها الأصلية بدون قص أو تشويه.
         </p>
+
+        <ImagePositionControls image={image} onChange={onChange} />
 
         {draggable ? (
           <div className="grid grid-cols-2 gap-2">
@@ -985,6 +1002,116 @@ function ImageEditorCard({
         ) : null}
       </div>
     </article>
+  );
+}
+
+function ImagePositionControls({ image, onChange }) {
+  const focusX = Math.max(0, Math.min(100, Number(image.focusX ?? 50)));
+  const focusY = Math.max(0, Math.min(100, Number(image.focusY ?? 50)));
+
+  function move(xDelta, yDelta) {
+    onChange({
+      focusX: Math.max(0, Math.min(100, focusX + xDelta)),
+      focusY: Math.max(0, Math.min(100, focusY + yDelta))
+    });
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="inline-flex items-center gap-2 text-xs font-black text-slate-800">
+          <Move size={15} className="text-emerald-600" /> موضع الصورة داخل البطاقات
+        </span>
+        <button
+          type="button"
+          onClick={() => onChange({ focusX: 50, focusY: 50 })}
+          className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-black text-slate-600 shadow-sm"
+        >
+          <RotateCcw size={13} /> توسيط
+        </button>
+      </div>
+
+      <div className="mt-3 grid grid-cols-[1fr_112px] items-center gap-3">
+        <div className="space-y-3">
+          <label className="block">
+            <span className="mb-1.5 flex items-center justify-between text-[10px] font-black text-slate-500">
+              <span>أفقي</span><span>{Math.round(focusX)}%</span>
+            </span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={focusX}
+              onChange={(event) => onChange({ focusX: Number(event.target.value) })}
+              className="w-full accent-emerald-600"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 flex items-center justify-between text-[10px] font-black text-slate-500">
+              <span>رأسي</span><span>{Math.round(focusY)}%</span>
+            </span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={focusY}
+              onChange={(event) => onChange({ focusY: Number(event.target.value) })}
+              className="w-full accent-emerald-600"
+            />
+          </label>
+        </div>
+
+        <div className="space-y-2">
+          <div className="relative aspect-square overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <img
+              src={image.url}
+              alt="معاينة موضع الصورة داخل البطاقة"
+              className="h-full w-full object-contain p-1"
+              style={{ objectPosition: `${focusX}% ${focusY}%` }}
+              draggable={false}
+            />
+          </div>
+          <div className="grid grid-cols-3 gap-1.5">
+            <span />
+            <PositionButton label="أعلى" onClick={() => move(0, -5)}><ArrowUp size={15} /></PositionButton>
+            <span />
+            <PositionButton label="يمين" onClick={() => move(5, 0)}><ArrowRight size={15} /></PositionButton>
+            <button
+              type="button"
+              onClick={() => onChange({ focusX: 50, focusY: 50 })}
+              className="grid h-9 place-items-center rounded-lg bg-emerald-600 text-[9px] font-black text-white"
+              title="توسيط"
+            >
+              50
+            </button>
+            <PositionButton label="يسار" onClick={() => move(-5, 0)}><ArrowLeft size={15} /></PositionButton>
+            <span />
+            <PositionButton label="أسفل" onClick={() => move(0, 5)}><ArrowDown size={15} /></PositionButton>
+            <span />
+          </div>
+        </div>
+      </div>
+
+      <p className="mt-2 text-[10px] font-bold leading-5 text-slate-500">
+        استخدم الأسهم للتحريك 5% في كل ضغطة، أو استخدم الشريط لتحديد الموضع بدقة.
+      </p>
+    </div>
+  );
+}
+
+function PositionButton({ label, onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="grid h-9 place-items-center rounded-lg bg-white text-slate-700 shadow-sm transition hover:bg-emerald-50 hover:text-emerald-700"
+      title={label}
+      aria-label={label}
+    >
+      {children}
+    </button>
   );
 }
 

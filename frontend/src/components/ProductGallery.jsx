@@ -56,6 +56,7 @@ export default function ProductGallery({ product, desktop = false }) {
                     fill
                     sizes="88px"
                     className="object-contain p-1"
+                    style={{ objectPosition: `${image.focusX ?? 50}% ${image.focusY ?? 50}%` }}
                   />
                 </button>
               ))}
@@ -73,6 +74,7 @@ export default function ProductGallery({ product, desktop = false }) {
               priority
               sizes="(max-width: 1024px) 100vw, 680px"
               className="h-auto max-h-[680px] w-full object-contain"
+              style={{ objectPosition: `${activeImage.focusX ?? 50}% ${activeImage.focusY ?? 50}%` }}
             />
 
             <span className="absolute right-5 top-5 inline-flex items-center gap-2 rounded-full bg-white/95 px-4 py-2 text-xs font-black text-slate-900 shadow-lg backdrop-blur">
@@ -119,6 +121,7 @@ export default function ProductGallery({ product, desktop = false }) {
           priority
           sizes="100vw"
           className="h-auto max-h-[78vh] w-full object-contain"
+          style={{ objectPosition: `${activeImage.focusX ?? 50}% ${activeImage.focusY ?? 50}%` }}
         />
         <span className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-full border border-white/70 bg-white/95 px-2.5 py-1.5 text-[10px] font-black text-slate-900 shadow-md backdrop-blur min-[360px]:right-4 min-[360px]:top-4 min-[360px]:px-3 min-[360px]:text-[11px]">
           <BadgeCheck size={14} className="text-emerald-600 min-[360px]:h-[15px] min-[360px]:w-[15px]" /> منتج متوفر
@@ -149,6 +152,7 @@ export default function ProductGallery({ product, desktop = false }) {
                 fill
                 sizes="64px"
                 className="object-contain p-0.5"
+                style={{ objectPosition: `${image.focusX ?? 50}% ${image.focusY ?? 50}%` }}
               />
             </button>
           ))}
